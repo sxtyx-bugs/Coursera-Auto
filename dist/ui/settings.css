@@ -1,0 +1,554 @@
+/* ==========================================================================
+   COURSERA ASSISTANT — WHITE SKEUOMORPHIC PREFERENCES INTERFACE
+   Swiss Editorial Minimalism • Physical Tactile Depth • Enamel & Machined Bevels
+   Created by satydev & satuxcodes (github.com/sxtyx-bugs)
+   ========================================================================== */
+
+:root {
+  /* Surfaces */
+  --chassis-bg: #eaecf0;
+  --surface-plate: #ffffff;
+  --surface-tray: #f8fafc;
+  --surface-well: #eef2f6;
+
+  /* Borders & Bevels */
+  --border-outer: #d5d9e2;
+  --border-subtle: #e2e8f0;
+  --border-bevel: #ffffff;
+  --border-well: #cbd5e1;
+  --border-focus: #0f172a;
+  --border-ledge: #9ba3b4;
+
+  /* Typography */
+  --text-black: #09090b;
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+  --text-subtle: #94a3b8;
+
+  /* Tactile Physics */
+  --shadow-chassis: 0 12px 36px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.04), inset 0 1px 0 #ffffff;
+  --shadow-recessed: inset 0 2px 4px rgba(0, 0, 0, 0.07), 0 1px 0 #ffffff;
+  --shadow-tray: inset 0 1px 2px rgba(0, 0, 0, 0.02), 0 1px 0 #ffffff;
+  --shadow-elevated: 0 2px 4px rgba(0, 0, 0, 0.05), inset 0 1px 0 #ffffff;
+  --shadow-hover: 0 3px 8px rgba(0, 0, 0, 0.08), inset 0 1px 0 #ffffff;
+  --shadow-pressed: inset 0 2px 4px rgba(0, 0, 0, 0.14);
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --transition-tactile: 90ms ease-out;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--chassis-bg);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 40px 16px;
+  user-select: none;
+}
+
+.settings-chassis {
+  width: 100%;
+  max-width: 580px;
+}
+
+.settings-panel {
+  background: var(--surface-plate);
+  border: 1px solid var(--border-outer);
+  border-top: 1px solid var(--border-bevel);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-chassis);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+/* ==========================================================================
+   01. HEADER PLATE
+   ========================================================================== */
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  box-shadow: 0 1px 0 #ffffff;
+}
+
+.header-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-logo {
+  border-radius: var(--radius-sm);
+  display: block;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), inset 0 1px 0 #ffffff;
+  border: 1px solid #d5d9e2;
+}
+
+.header-titles {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.brand-heading-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  line-height: 1.1;
+}
+
+.brand-name-serif {
+  font-family: "Didot", "Bodoni MT", "Playfair Display", Georgia, serif;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-black);
+}
+
+.brand-badge-editorial {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: #c41e24;
+  color: #ffffff;
+  text-transform: uppercase;
+  line-height: 1.1;
+  box-shadow: 0 1px 2px rgba(196, 30, 36, 0.3);
+}
+
+.header-subtitle {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.header-badge {
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  background: #e2e8f0;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), inset 0 1px 0 #ffffff;
+}
+
+/* ==========================================================================
+   02. SECTIONS & TRAYS
+   ========================================================================== */
+.settings-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.section-title {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  text-shadow: 0 1px 0 #ffffff;
+}
+
+.section-desc {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.tray-card {
+  background: var(--surface-tray);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-tray);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.setting-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.setting-item.vertical {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.setting-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.setting-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-black);
+  cursor: pointer;
+}
+
+.setting-hint {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.divider {
+  height: 1px;
+  background: var(--border-subtle);
+  box-shadow: 0 1px 0 #ffffff;
+}
+
+/* ==========================================================================
+   03. DEBOSSED INPUT WELLS
+   ========================================================================== */
+.input-well {
+  display: flex;
+  align-items: center;
+  background: var(--surface-well);
+  border: 1px solid var(--border-well);
+  box-shadow: var(--shadow-recessed);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  transition: border-color var(--transition-tactile);
+}
+
+.input-well:focus-within {
+  border-color: var(--border-focus);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.1), 0 0 0 1px #0f172a;
+}
+
+.well-tag {
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  background: #e2e7ef;
+  border-right: 1px solid var(--border-well);
+  padding: 8px 10px;
+  flex-shrink: 0;
+}
+
+.input-well input[type="password"],
+.input-well input[type="text"] {
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  color: var(--text-black);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  outline: none;
+}
+
+.input-well select {
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  color: var(--text-black);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  outline: none;
+  cursor: pointer;
+}
+
+.input-well select option {
+  background: #ffffff;
+  color: #09090b;
+}
+
+.input-well-compact {
+  display: flex;
+  align-items: center;
+  background: var(--surface-well);
+  border: 1px solid var(--border-well);
+  box-shadow: var(--shadow-recessed);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  width: 130px;
+  flex-shrink: 0;
+}
+
+.input-well-compact:focus-within {
+  border-color: var(--border-focus);
+}
+
+.input-well-compact input[type="number"] {
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  color: var(--text-black);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: right;
+  outline: none;
+  -moz-appearance: textfield;
+}
+
+.input-well-compact input[type="number"]::-webkit-outer-spin-button,
+.input-well-compact input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.unit-tag {
+  font-size: 9.5px;
+  font-weight: 800;
+  color: var(--text-secondary);
+  background: #e2e7ef;
+  border-left: 1px solid var(--border-well);
+  padding: 7px 8px;
+  flex-shrink: 0;
+}
+
+/* ==========================================================================
+   04. SKEUOMORPHIC TOGGLE SWITCH
+   ========================================================================== */
+.skeuo-toggle {
+  position: relative;
+  display: inline-block;
+  width: 42px;
+  height: 24px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.skeuo-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-track {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: #e2e6ed;
+  border: 1px solid #cbd2dc;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1), 0 1px 0 #ffffff;
+  border-radius: 12px;
+  transition: all var(--transition-tactile);
+}
+
+.toggle-thumb {
+  position: absolute;
+  content: "";
+  height: 18px;
+  width: 18px;
+  left: 2px;
+  bottom: 2px;
+  background: linear-gradient(180deg, #ffffff 0%, #edf1f6 100%);
+  border: 1px solid #94a3b8;
+  border-radius: 50%;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.18), inset 0 1px 0 #ffffff;
+  transition: all var(--transition-tactile);
+}
+
+input:checked + .toggle-track {
+  background: #0f172a;
+  border-color: #020617;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.35);
+}
+
+input:checked + .toggle-track .toggle-thumb {
+  transform: translateX(18px);
+  background: linear-gradient(180deg, #ffffff 0%, #f1f4f8 100%);
+  border-color: #ffffff;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.25), inset 0 1px 0 #ffffff;
+}
+
+/* ==========================================================================
+   05. ACTIONS & SAVE BUTTON
+   ========================================================================== */
+.actions-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.btn-tactile-primary {
+  width: 100%;
+  padding: 12px 18px;
+  background: linear-gradient(180deg, #ffffff 0%, #ebedf4 100%);
+  color: var(--text-black);
+  border: 1.5px solid #c0c6d2;
+  border-bottom: 3.5px solid #858d9d;
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: all var(--transition-tactile);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.07), inset 0 1px 0 #ffffff;
+  text-shadow: 0 1px 0 #ffffff;
+}
+
+.btn-tactile-primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, #ffffff 0%, #f4f5f9 100%);
+  border-color: #9ea6b5;
+  border-bottom: 3.5px solid #6b7280;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.1), inset 0 1px 0 #ffffff;
+}
+
+.btn-tactile-primary:active:not(:disabled) {
+  transform: translateY(2.5px);
+  border-bottom: 1px solid #858d9d;
+  background: #dfe3eb;
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.15);
+}
+
+.status-feedback {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  min-height: 18px;
+  text-align: center;
+}
+
+.status-feedback.success {
+  color: #0f172a;
+}
+
+.status-feedback.error {
+  color: #b91c1c;
+}
+
+/* ==========================================================================
+   06. ATTRIBUTION FOOTER
+   ========================================================================== */
+.attribution-plate {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 14px;
+  margin-top: 8px;
+  box-shadow: 0 -1px 0 #ffffff;
+}
+
+.attribution-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.attribution-label {
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  text-shadow: 0 1px 0 #ffffff;
+}
+
+.creator-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  background: linear-gradient(180deg, #ffffff 0%, #f1f4f8 100%);
+  border: 1px solid var(--border-well);
+  border-bottom: 2px solid var(--border-ledge);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  text-decoration: none;
+  font-size: 11px;
+  font-weight: 700;
+  box-shadow: var(--shadow-elevated);
+  transition: all var(--transition-tactile);
+}
+
+.creator-badge:hover {
+  background: #ffffff;
+  border-color: #64748b;
+  color: #000000;
+  box-shadow: var(--shadow-hover);
+}
+
+.creator-badge:active {
+  transform: translateY(1px);
+  border-bottom: 1px solid var(--border-ledge);
+  background: #e2e7ef;
+  box-shadow: var(--shadow-pressed);
+}
+
+.github-icon {
+  flex-shrink: 0;
+  color: var(--text-primary);
+}
+
+.creator-badge:hover .github-icon {
+  color: #000000;
+}
+
+.creator-name {
+  color: var(--text-black);
+}
+
+.creator-sep {
+  color: var(--text-muted);
+  font-weight: 400;
+  font-size: 10px;
+}
+
+.creator-arrow {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.creator-badge:hover .creator-arrow {
+  color: #000000;
+}
+
+/* Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

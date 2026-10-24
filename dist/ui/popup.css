@@ -1,0 +1,769 @@
+/* ==========================================================================
+   COURSERA ASSISTANT — WHITE SKEUOMORPHIC INTERFACE
+   Swiss Editorial Minimalism • Physical Tactile Depth • Enamel & Machined Bevels
+   Created by satydev & satuxcodes (github.com/sxtyx-bugs)
+   ========================================================================== */
+
+:root {
+  /* Surfaces (Architectural Studio White Skeuomorphism) */
+  --chassis-bg: #eaecf0;
+  --surface-plate: #ffffff;
+  --surface-panel: #f8fafc;
+  --surface-well: #eef2f6;
+
+  /* Borders & Mechanical Ledges */
+  --border-subtle: #e2e8f0;
+  --border-plate: #d5d9e2;
+  --border-button: #cbd2de;
+  --border-ledge: #9ba3b4;
+  --border-focus: #0f172a;
+
+  /* Tactile Buttons */
+  --btn-face-top: #ffffff;
+  --btn-face-bottom: #f0f3f8;
+  --btn-hover-top: #ffffff;
+  --btn-hover-bottom: #f8fafd;
+  --btn-pressed-bg: #e2e7ef;
+
+  /* Primary Enamel Button */
+  --hero-btn-top: #ffffff;
+  --hero-btn-bottom: #ebedf4;
+  --hero-btn-border: #c0c6d2;
+  --hero-btn-ledge: #858d9d;
+  --hero-btn-text: #09090b;
+
+  /* Swiss Typography */
+  --text-black: #09090b;
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+  --text-subtle: #94a3b8;
+
+  /* Tactile Physics Shadows */
+  --shadow-elevated: 0 2px 4px rgba(0, 0, 0, 0.05), inset 0 1px 0 #ffffff;
+  --shadow-hover: 0 3px 8px rgba(0, 0, 0, 0.08), inset 0 1px 0 #ffffff;
+  --shadow-recessed: inset 0 2px 4px rgba(0, 0, 0, 0.07), 0 1px 0 #ffffff;
+  --shadow-pressed: inset 0 2px 4px rgba(0, 0, 0, 0.14);
+  --shadow-chassis: 0 10px 28px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.04), inset 0 1px 0 #ffffff;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --transition-tactile: 90ms ease-out;
+}
+
+/* Base Reset */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--chassis-bg);
+  color: var(--text-primary);
+  width: 360px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 12px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  padding: 12px;
+  user-select: none;
+}
+
+.chassis {
+  background: var(--surface-plate);
+  border: 1px solid var(--border-plate);
+  border-top: 1px solid #ffffff;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-chassis);
+  padding: 13px;
+}
+
+#courseraModelContent {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ==========================================================================
+   01. HEADER PLATE
+   ========================================================================== */
+.popup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  box-shadow: 0 1px 0 #ffffff;
+}
+
+.brand-group {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.brand-logo {
+  border-radius: var(--radius-sm);
+  display: block;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), inset 0 1px 0 #ffffff;
+  border: 1px solid #d5d9e2;
+}
+
+.brand-titles {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.brand-heading-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1.1;
+}
+
+.brand-name-serif {
+  font-family: "Didot", "Bodoni MT", "Playfair Display", Georgia, serif;
+  font-size: 15.5px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-black);
+}
+
+.brand-badge-editorial {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  padding: 1.5px 4.5px;
+  border-radius: 3px;
+  background: #c41e24;
+  color: #ffffff;
+  text-transform: uppercase;
+  line-height: 1.1;
+  box-shadow: 0 1px 2px rgba(196, 30, 36, 0.3);
+}
+
+.brand-subtitle {
+  font-size: 8.5px;
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.settings-btn {
+  background: linear-gradient(180deg, #ffffff 0%, #f1f4f8 100%);
+  border: 1px solid var(--border-button);
+  border-bottom: 2px solid var(--border-ledge);
+  color: var(--text-secondary);
+  cursor: pointer;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-elevated);
+  transition: all var(--transition-tactile);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.settings-btn:hover {
+  background: #ffffff;
+  color: var(--text-black);
+  border-color: #64748b;
+  box-shadow: var(--shadow-hover);
+}
+
+.settings-btn:active {
+  transform: translateY(1px);
+  border-bottom: 1px solid var(--border-ledge);
+  background: var(--btn-pressed-bg);
+  box-shadow: var(--shadow-pressed);
+}
+
+.settings-btn:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 1px;
+}
+
+/* ==========================================================================
+   02. USER PROFILE (Debossed Slot)
+   ========================================================================== */
+.user-profile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--surface-well);
+  border: 1px solid #cbd5e1;
+  box-shadow: var(--shadow-recessed);
+  border-radius: var(--radius-md);
+}
+
+.user-avatar-well {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), inset 0 1px 0 #ffffff;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.user-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow: hidden;
+  flex: 1;
+}
+
+.user-name {
+  font-weight: 700;
+  font-size: 11.5px;
+  color: var(--text-black);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.user-email {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ==========================================================================
+   03. SECTION LABELS
+   ========================================================================== */
+.section-label {
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+  text-shadow: 0 1px 0 #ffffff;
+}
+
+/* ==========================================================================
+   04. WORKFLOWS BUTTON GRID (Physical Tactile Keys)
+   ========================================================================== */
+.section-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.button-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.courseraBtnWrapper {
+  position: relative;
+}
+
+.courseraModelBtn {
+  width: 100%;
+  padding: 10px 10px;
+  background: linear-gradient(180deg, var(--btn-face-top) 0%, var(--btn-face-bottom) 100%);
+  border: 1px solid var(--border-button);
+  border-bottom: 2.5px solid var(--border-ledge);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all var(--transition-tactile);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  box-shadow: var(--shadow-elevated);
+  line-height: 1.25;
+  text-shadow: 0 1px 0 #ffffff;
+}
+
+.btn-feature-label {
+  color: var(--text-primary);
+  display: block;
+  white-space: normal;
+  word-break: normal;
+  overflow: visible;
+}
+
+.courseraModelBtn:hover:not(:disabled) {
+  background: linear-gradient(180deg, var(--btn-hover-top) 0%, var(--btn-hover-bottom) 100%);
+  border-color: #94a3b8;
+  border-bottom: 2.5px solid #64748b;
+  box-shadow: var(--shadow-hover);
+  color: var(--text-black);
+}
+
+.courseraModelBtn:hover:not(:disabled) .btn-feature-label {
+  color: var(--text-black);
+}
+
+.courseraModelBtn:active:not(:disabled) {
+  transform: translateY(1.5px);
+  background: var(--btn-pressed-bg);
+  border-bottom: 1px solid var(--border-ledge);
+  box-shadow: var(--shadow-pressed);
+}
+
+.courseraModelBtn:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 1px;
+}
+
+.courseraModelBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* ==========================================================================
+   05. AI SETTINGS RECESSED TRAY
+   ========================================================================== */
+.panel-box {
+  background: var(--surface-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.02), 0 1px 0 #ffffff;
+  padding: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.setting-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.setting-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.setting-title {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-black);
+}
+
+.setting-subtitle {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* ==========================================================================
+   06. PHYSICAL SKEUOMORPHIC TOGGLE SWITCH
+   ========================================================================== */
+.skeuo-toggle {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 22px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.skeuo-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-track {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: #e2e6ed;
+  border: 1px solid #cbd2dc;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1), 0 1px 0 #ffffff;
+  border-radius: 11px;
+  transition: all var(--transition-tactile);
+}
+
+.toggle-thumb {
+  position: absolute;
+  content: "";
+  height: 16px;
+  width: 16px;
+  left: 2px;
+  bottom: 2px;
+  background: linear-gradient(180deg, #ffffff 0%, #edf1f6 100%);
+  border: 1px solid #94a3b8;
+  border-radius: 50%;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.18), inset 0 1px 0 #ffffff;
+  transition: all var(--transition-tactile);
+}
+
+input:checked + .toggle-track {
+  background: #0f172a;
+  border-color: #020617;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.35);
+}
+
+input:checked + .toggle-track .toggle-thumb {
+  transform: translateX(18px);
+  background: linear-gradient(180deg, #ffffff 0%, #f1f4f8 100%);
+  border-color: #ffffff;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.25), inset 0 1px 0 #ffffff;
+}
+
+input:focus-visible + .toggle-track {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 1px;
+}
+
+/* ==========================================================================
+   07. DEBOSSED INPUT WELLS
+   ========================================================================== */
+.well-group {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.input-well {
+  display: flex;
+  align-items: center;
+  background: var(--surface-well);
+  border: 1px solid #cbd3de;
+  box-shadow: var(--shadow-recessed);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  transition: border-color var(--transition-tactile);
+}
+
+.input-well:focus-within {
+  border-color: #0f172a;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.1), 0 0 0 1px #0f172a;
+}
+
+.well-label {
+  font-size: 9.5px;
+  font-weight: 800;
+  color: var(--text-secondary);
+  background: #e2e7ef;
+  border-right: 1px solid #cbd3de;
+  padding: 7px 8px;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+}
+
+.input-well input[type="password"],
+.input-well input[type="text"] {
+  width: 100%;
+  padding: 6px 9px;
+  background: transparent;
+  border: none;
+  color: var(--text-black);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  outline: none;
+}
+
+.input-well input::placeholder {
+  color: var(--text-subtle);
+  font-weight: 400;
+}
+
+.input-well select {
+  width: 100%;
+  padding: 6px 9px;
+  background: transparent;
+  border: none;
+  color: var(--text-black);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  outline: none;
+  cursor: pointer;
+}
+
+.input-well select option {
+  background: #ffffff;
+  color: #09090b;
+}
+
+.btn-tactile-secondary {
+  width: 100%;
+  padding: 8px 12px;
+  background: linear-gradient(180deg, #ffffff 0%, #f0f3f8 100%);
+  border: 1px solid var(--border-button);
+  border-bottom: 2px solid var(--border-ledge);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: var(--shadow-elevated);
+  transition: all var(--transition-tactile);
+  text-align: center;
+  text-shadow: 0 1px 0 #ffffff;
+}
+
+.btn-tactile-secondary:hover {
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafd 100%);
+  color: var(--text-black);
+  border-color: #64748b;
+  box-shadow: var(--shadow-hover);
+}
+
+.btn-tactile-secondary:active {
+  transform: translateY(1px);
+  background: var(--btn-pressed-bg);
+  border-bottom: 1px solid var(--border-ledge);
+  box-shadow: var(--shadow-pressed);
+}
+
+.btn-tactile-secondary.saved {
+  background: #0f172a;
+  color: #ffffff;
+  border-color: #000000;
+  text-shadow: none;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+}
+
+.status-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+  line-height: 1.3;
+}
+
+/* ==========================================================================
+   08. PRIMARY STOMP BUTTON (Pure White Enamel Tactile Anchor)
+   ========================================================================== */
+.btn-tactile-primary {
+  width: 100%;
+  padding: 10.5px 14px;
+  background: linear-gradient(180deg, var(--hero-btn-top) 0%, var(--hero-btn-bottom) 100%);
+  color: var(--hero-btn-text);
+  border: 1.5px solid var(--hero-btn-border);
+  border-bottom: 3.5px solid var(--hero-btn-ledge);
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: all var(--transition-tactile);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.07), inset 0 1px 0 #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 2px;
+  text-shadow: 0 1px 0 #ffffff;
+}
+
+.btn-tactile-primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, #ffffff 0%, #f4f5f9 100%);
+  border-color: #9ea6b5;
+  border-bottom: 3.5px solid #6b7280;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.1), inset 0 1px 0 #ffffff;
+}
+
+.btn-tactile-primary:active:not(:disabled) {
+  transform: translateY(2.5px);
+  border-bottom: 1px solid var(--hero-btn-ledge);
+  background: #dfe3eb;
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.15);
+}
+
+.btn-tactile-primary:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+.btn-tactile-primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.badge-pill {
+  font-size: 8.5px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: #e2e8f0;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), inset 0 1px 0 #ffffff;
+  text-transform: uppercase;
+  transition: all var(--transition-tactile);
+}
+
+.badge-pill.badge-on {
+  background: #0f172a;
+  color: #ffffff;
+  border-color: #020617;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.toggle-key-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color var(--transition-tactile);
+  flex-shrink: 0;
+}
+
+.toggle-key-btn:hover {
+  color: var(--text-black);
+}
+
+.toggle-key-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.api-link {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: color var(--transition-tactile);
+}
+
+.api-link:hover {
+  color: var(--text-black);
+}
+
+.btn-tactile-primary.is-active,
+.courseraModelBtn.is-active {
+  transform: translateY(2px) !important;
+  background: #e2e6ee !important;
+  color: #475569 !important;
+  border-color: #94a3b8 !important;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.16) !important;
+}
+
+/* ==========================================================================
+   09. ATTRIBUTION PLATE (Created by satydev & satuxcodes)
+   ========================================================================== */
+.attribution-plate {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 10px;
+  margin-top: 2px;
+  box-shadow: 0 -1px 0 #ffffff;
+}
+
+.attribution-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.attribution-label {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  text-shadow: 0 1px 0 #ffffff;
+}
+
+.creator-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4.5px 9px;
+  background: linear-gradient(180deg, #ffffff 0%, #f1f4f8 100%);
+  border: 1px solid var(--border-button);
+  border-bottom: 2px solid var(--border-ledge);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  text-decoration: none;
+  font-size: 10.5px;
+  font-weight: 700;
+  box-shadow: var(--shadow-elevated);
+  transition: all var(--transition-tactile);
+}
+
+.creator-badge:hover {
+  background: #ffffff;
+  border-color: #64748b;
+  color: #000000;
+  box-shadow: var(--shadow-hover);
+}
+
+.creator-badge:active {
+  transform: translateY(1px);
+  border-bottom: 1px solid var(--border-ledge);
+  background: var(--btn-pressed-bg);
+  box-shadow: var(--shadow-pressed);
+}
+
+.github-icon {
+  flex-shrink: 0;
+  color: var(--text-primary);
+}
+
+.creator-badge:hover .github-icon {
+  color: #000000;
+}
+
+.creator-name {
+  color: var(--text-black);
+  letter-spacing: -0.01em;
+}
+
+.creator-sep {
+  color: var(--text-muted);
+  font-weight: 400;
+  font-size: 10px;
+}
+
+.creator-arrow {
+  color: var(--text-muted);
+  font-size: 10px;
+  transition: transform var(--transition-tactile);
+}
+
+.creator-badge:hover .creator-arrow {
+  transform: translate(1px, -1px);
+  color: #000000;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

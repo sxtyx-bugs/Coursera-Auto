@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Coursera Assistant — Editorial Edition</title>
+    <link rel="icon" type="image/png" href="assets/4.png" />
+    <link rel="stylesheet" href="ui/popup.css" />
+  </head>
+
+  <body>
+    <div id="courseraModel" class="chassis">
+      <div id="courseraModelContent">
+        
+        <!-- Header -->
+        <header class="popup-header">
+          <div class="brand-group">
+            <img src="assets/4.png" alt="Editorial C Logo" class="brand-logo" width="26" height="26" />
+            <div class="brand-titles">
+              <div class="brand-heading-row">
+                <span class="brand-name-serif">coursera</span>
+                <span class="brand-badge-editorial">ASSISTANT</span>
+              </div>
+              <span class="brand-subtitle">BY SATYDEV &amp; SATUXCODES • SWISS EDITORIAL</span>
+            </div>
+          </div>
+          <button id="settingsBtn" class="settings-btn" title="Open Settings" aria-label="Open Settings">
+            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+          </button>
+        </header>
+
+        <!-- User Profile (Debossed Slot) -->
+        <div id="userProfile" class="user-profile hidden">
+          <div class="user-avatar-well">
+            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+          </div>
+          <div class="user-info">
+            <span id="userName" class="user-name">Coursera Student</span>
+            <span id="userEmail" class="user-email"></span>
+          </div>
+        </div>
+
+        <!-- Section 1: Course Progression Workflows -->
+        <div class="section-group">
+          <div class="section-label">COURSE WORKFLOWS</div>
+          <div class="button-grid">
+            <div class="courseraBtnWrapper">
+              <button class="courseraModelBtn" id="bypass" title="Skip lectures, readings & discussion prompts">
+                <span class="btn-feature-label">Course Progression</span>
+              </button>
+            </div>
+            <div class="courseraBtnWrapper">
+              <button class="courseraModelBtn" id="dialogueBtn" title="Auto-advance Coach Dialogue">
+                <span class="btn-feature-label">Coach Dialogue</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section 2: AI Quiz Solver -->
+        <div class="panel-box">
+          <div class="section-label">AI QUIZ SOLVER</div>
+
+          <!-- Primary CTA Button (Pure White Stomp Button) -->
+          <button id="autoQuiz" class="btn-tactile-primary" title="Solve the currently opened quiz attempt">
+            <span>Solve Active Quiz</span>
+          </button>
+
+          <!-- Auto-Solve Toggle Row -->
+          <div class="setting-row">
+            <div class="setting-text">
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <span class="setting-title">Auto-Solve on Open</span>
+                <span id="autoBadge" class="badge-pill">OFF</span>
+              </div>
+              <span class="setting-subtitle">Solves quiz automatically when opened</span>
+            </div>
+            <label class="skeuo-toggle" for="quizToggel">
+              <input type="checkbox" id="quizToggel">
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Section 3: AI Engine Config -->
+        <div class="panel-box">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div class="section-label" style="margin-bottom: 0;">AI ENGINE CONFIG</div>
+            <a href="https://aistudio.google.com/app/apikey" target="_blank" class="api-link" id="apiKeyLink">Get Free Key ↗</a>
+          </div>
+
+          <div class="well-group">
+            <!-- Model Well -->
+            <div class="input-well">
+              <span class="well-label">MDL</span>
+              <select id="model-select">
+                <option value="gemini-3.8-flash" selected>Gemini 3.8 Flash (Latest • Recommended)</option>
+                <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash Lite (Ultra Fast)</option>
+                <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+                <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
+              </select>
+            </div>
+
+            <!-- Key Well -->
+            <div class="input-well">
+              <span class="well-label">KEY</span>
+              <input type="password" id="key" placeholder="Paste Gemini API key" autocomplete="off" spellcheck="false" />
+              <button type="button" class="toggle-key-btn" id="toggleKeyVisibility" title="Show key">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                  <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+              </button>
+            </div>
+
+            <button id="save" class="btn-tactile-secondary">Save Settings</button>
+            <p id="key-status" class="status-hint">Required for auto-solving Coursera quizzes.</p>
+          </div>
+        </div>
+
+        <!-- Attribution Plate -->
+        <footer class="attribution-plate">
+          <div class="attribution-inner">
+            <span class="attribution-label">CREATED BY</span>
+            <a href="https://github.com/sxtyx-bugs" target="_blank" rel="noopener noreferrer" class="creator-badge" id="authorGithubLink" title="Visit GitHub: sxtyx-bugs">
+              <svg class="github-icon" viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+              </svg>
+              <span class="creator-name">satydev</span>
+              <span class="creator-sep">&amp;</span>
+              <span class="creator-name">satuxcodes</span>
+              <span class="creator-arrow">↗</span>
+            </a>
+          </div>
+        </footer>
+
+      </div>
+    </div>
+
+    <!-- Engine Scripts -->
+    <script src="scripts/model-provider.js"></script>
+    <script src="scripts/popup.js"></script>
+  </body>
+</html>
