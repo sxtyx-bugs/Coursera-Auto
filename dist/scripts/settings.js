@@ -8,14 +8,11 @@
   'use strict';
 
   const APPROVED_QUIZ_MODELS = [
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
-    "gemini-1.5-pro",
     "gemini-3.8-flash",
-    "gemini-3.5-flash-lite"
+    "gemini-3.5-flash",
+    "gemini-3-flash-preview"
   ];
-  const DEFAULT_QUIZ_MODEL = "gemini-2.5-flash";
+  const DEFAULT_QUIZ_MODEL = "gemini-3-flash-preview";
 
   const normalizeQuizModel = (raw) => {
     if (!raw || typeof raw !== "string") return DEFAULT_QUIZ_MODEL;
@@ -81,27 +78,12 @@
         }, () => {
           if (statusDiv) {
             statusDiv.textContent = "Preferences saved successfully.";
-            statusDiv.style.color = "#0f172a";
+            statusDiv.style.color = "#10b981";
             setTimeout(() => {
               statusDiv.textContent = "";
-            }, 2500);
+            }, 2000);
           }
         });
-      });
-    });
-
-    // Handle external links
-    document.querySelectorAll('a[target="_blank"]').forEach((link) => {
-      link.addEventListener('click', (e) => {
-        e.preventDefault();
-        const url = link.getAttribute('href');
-        if (url) {
-          if (chrome.tabs?.create) {
-            chrome.tabs.create({ url });
-          } else {
-            window.open(url, '_blank');
-          }
-        }
       });
     });
   });

@@ -35,9 +35,14 @@
 | :--- | :--- | :--- |
 | **Solve Active Quiz** | `quiz` | Solves the currently open quiz attempt using Gemini AI and selects correct answers with on-page toast feedback. |
 | **Auto-Solve on Open** | `autoQuiz` | Hardware-style toggle that automatically triggers the quiz solver whenever an `/attempt` page is opened. |
-| **Course Progression** | `bypass` | One-click engine to mark eligible lecture videos, readings, and discussion prompts as completed. |
-| **Discussions & Dialogues** | `dialogue` / `discussion` | Auto-scans syllabus to find and complete all discussion prompts and interactive Coach dialogues across the entire course. |
-| **Gemini Engine Config** | `key` / `model` | Configurable model selector (`gemini-2.5-flash`, `gemini-2.0-flash`, `gemini-1.5-flash`, or `gemini-1.5-pro`) and local API key storage. |
+| **Course Progression** | `bypass` | One-click all-in-one engine to mark eligible lecture videos, readings, discussions, and dialogues as completed. |
+| **Coach Dialogue** | `dialogue` | Auto-completes interactive Coach dialogues and ungraded widgets via session API & auto-navigation runner. |
+| **Discussions** | `discussion` | Auto-discovers and answers all forum discussion prompts across the course. |
+| **Reading Material** | `reading` | Marks all eligible reading and supplemental materials in the course as completed. |
+| **Video Lectures** | `video` | Completes and synchronizes playback progress for all course video lectures. |
+| **Solve Active Quiz** | `quiz` | Solves the currently open quiz attempt using Gemini AI and marks answers with live on-page feedback. |
+| **Auto-Solve on Open** | `autoQuiz` | Hardware toggle that automatically triggers the quiz solver whenever an `/attempt` page is opened. |
+| **Gemini Engine Config** | `key` / `model` | Configurable model selector (`gemini-3.8-flash`, `gemini-3.5-flash-lite`, `gemini-2.5-flash`) and local API key storage. |
 
 ---
 

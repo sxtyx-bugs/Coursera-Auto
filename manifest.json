@@ -40,7 +40,6 @@
         "*://*.coursera.org/*"
       ],
       "js": [
-        "dist/scripts/model-provider.js",
         "dist/scripts/content.js"
       ],
       "css": [
