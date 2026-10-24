@@ -41,8 +41,7 @@
       ],
       "js": [
         "dist/scripts/model-provider.js",
-        "dist/scripts/content.js",
-        "dist/scripts/dialogue.js"
+        "dist/scripts/content.js"
       ],
       "css": [
         "dist/ui/content.css"
