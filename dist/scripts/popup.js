@@ -210,14 +210,14 @@
       }, 2500);
     });
 
-    // 5. Coach Dialogue Button
+    // 5. Discussions & Dialogues Button
     dialogueBtn?.addEventListener('click', () => {
       const origContent = dialogueBtn.innerHTML;
       dialogueBtn.disabled = true;
       dialogueBtn.classList.add('is-active');
-      dialogueBtn.innerHTML = '<span class="btn-feature-label">Advancing...</span>';
+      dialogueBtn.innerHTML = '<span class="btn-feature-label">Processing...</span>';
       if (statusEl) {
-        statusEl.textContent = 'Advancing Coach Dialogue...';
+        statusEl.textContent = 'Processing discussions & dialogues across course...';
         statusEl.style.color = '#0f172a';
       }
 
@@ -233,10 +233,10 @@
         dialogueBtn.disabled = false;
         dialogueBtn.classList.remove('is-active');
         if (statusEl) {
-          statusEl.textContent = 'Dialogue action completed.';
+          statusEl.textContent = 'Discussions & dialogues active. Check page banner.';
           statusEl.style.color = '#64748b';
         }
-      }, 2000);
+      }, 2500);
     });
 
     // 6. Auto-Solve on Open Toggle

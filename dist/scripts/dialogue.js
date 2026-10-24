@@ -214,16 +214,53 @@
 
     let startBtn = findStartButton();
     if (!startBtn) {
-      for (let i = 0; i < 6; i++) {
-        await sleep(1000);
+      for (let i = 0; i < 4; i++) {
+        await sleep(600);
         if (isCompleted()) {
           await advanceDialogueQueue(courseSlug, storedQueue);
           return;
         }
         startBtn = findStartButton();
         if (startBtn) break;
-        if (document.querySelector('textarea.coach-rich-input-field-input, [data-testid="coach-rich-input-field-content"]')) {
+        if (document.querySelector('textarea.coach-rich-input-field-input, [data-testid="coach-rich-input-field-content"], [data-testid="coach-conversation-window"]')) {
           break;
+        }
+      }
+    }
+
+    // If still no dialogue elements found on current page and not already executing a queue, scan syllabus
+    if (!startBtn && !document.querySelector('textarea.coach-rich-input-field-input, [data-testid="coach-rich-input-field-content"], [data-testid="coach-conversation-window"]')) {
+      if (courseSlug && !isQueued) {
+        try {
+          showDialogueToast("Checking course syllabus for interactive Coach Dialogues...", "info");
+          const matUrl = `https://www.coursera.org/api/onDemandCourseMaterials.v2/?q=slug&slug=${courseSlug}&includes=modules,lessons,items`;
+          const resp = await fetch(matUrl, { credentials: "include" });
+          if (resp.ok) {
+            const data = await resp.json();
+            const items = data?.linked?.["onDemandCourseMaterialItems.v2"] || [];
+            const dialogues = items.filter(it => {
+              const cs = it.contentSummary || {};
+              const t = (cs.typeName || it.itemType || "").toLowerCase();
+              return t.includes("widget") || t.includes("coach") || t.includes("dialogue");
+            });
+            if (dialogues.length > 0) {
+              showDialogueToast(`Found ${dialogues.length} Coach dialogues. Launching auto-runner 1 by 1...`, "info");
+              const first = dialogues[0];
+              const remaining = dialogues.slice(1);
+              window.localStorage.setItem("ungradedWidgets", JSON.stringify(remaining));
+              await sleep(1500);
+              const targetUrl = first.contentSummary?.typeName === "coach"
+                ? `https://www.coursera.org/learn/${courseSlug}/coach/${first.id}/${first.slug || ""}`
+                : `https://www.coursera.org/learn/${courseSlug}/ungradedWidget/${first.id}`;
+              window.location.assign(targetUrl);
+              return;
+            } else {
+              showDialogueToast("✓ No interactive Coach widgets in syllabus (discussion prompts handled via API).", "info");
+              return;
+            }
+          }
+        } catch (e) {
+          console.error("[CoachAutomator] Syllabus scan error:", e);
         }
       }
     }
@@ -371,5 +408,18 @@
     }
   });
 
+  // Automatically execute if an active dialogue progression queue is stored
+  try {
+    if (typeof window !== "undefined" && window.localStorage?.getItem("ungradedWidgets")) {
+      const q = window.localStorage.getItem("ungradedWidgets");
+      if (q && q !== "[]") {
+        setTimeout(() => {
+          runCoachDialogueAutomator().catch(console.error);
+        }, 2200);
+      }
+    }
+  } catch (_) {}
+
   console.log("[CourseraAssistant] Dialogue companion loaded.");
 })();
+

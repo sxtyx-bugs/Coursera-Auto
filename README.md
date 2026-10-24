@@ -36,7 +36,7 @@
 | **Solve Active Quiz** | `quiz` | Solves the currently open quiz attempt using Gemini AI and selects correct answers with on-page toast feedback. |
 | **Auto-Solve on Open** | `autoQuiz` | Hardware-style toggle that automatically triggers the quiz solver whenever an `/attempt` page is opened. |
 | **Course Progression** | `bypass` | One-click engine to mark eligible lecture videos, readings, and discussion prompts as completed. |
-| **Coach Dialogue** | `dialogue` | Auto-advances interactive multi-turn Socratic Coach dialogue widgets. |
+| **Discussions & Dialogues** | `dialogue` / `discussion` | Auto-scans syllabus to find and complete all discussion prompts and interactive Coach dialogues across the entire course. |
 | **Gemini Engine Config** | `key` / `model` | Configurable model selector (`gemini-2.5-flash`, `gemini-2.0-flash`, `gemini-1.5-flash`, or `gemini-1.5-pro`) and local API key storage. |
 
 ---
