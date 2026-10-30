@@ -15,24 +15,11 @@
   ];
   const DEFAULT_MODEL = "gemini-3.8-flash";
 
-  const initAll = () => {
-    initWorkflows();
-    initGeminiSettings();
-    loadUserProfile();
-    initSettingsButton();
-  };
-
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", initAll);
-  } else {
-    initAll();
-  }
-
   /**
    * Helper to send action message to active Coursera tab
    * Supports auto-injection if extension was reloaded in developer mode
    */
-  const sendTabAction = (action, callback) => {
+  function sendTabAction(action, callback) {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (!tabs || !tabs[0] || !tabs[0].id) {
         if (callback) callback("No active tab found");
@@ -92,12 +79,12 @@
         if (callback) callback(null, response);
       });
     });
-  };
+  }
 
   /**
    * 1. Initialize Course Workflow Buttons
    */
-  const initWorkflows = () => {
+  function initWorkflows() {
     const statusEl = document.getElementById("key-status");
 
     const workflowMap = [
@@ -141,12 +128,12 @@
         }, 2200);
       });
     });
-  };
+  }
 
   /**
    * 2. Initialize Gemini Settings & AI Quiz Solver
    */
-  const initGeminiSettings = () => {
+  function initGeminiSettings() {
     const keyInput = document.getElementById("key");
     const modelSelect = document.getElementById("model-select");
     const saveBtn = document.getElementById("save");
@@ -278,14 +265,17 @@
         }, 2500);
       });
     });
-  };
+  }
 
   /**
    * 3. Load Authenticated User Profile
    */
-  const loadUserProfile = () => {
+  function loadUserProfile() {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (!tabs || !tabs[0] || !tabs[0].id) return;
+      const url = tabs[0].url || "";
+      if (!url.includes("coursera.org")) return;
+
       chrome.tabs.sendMessage(tabs[0].id, { action: "GET_USER_DATA" }, (res) => {
         if (chrome.runtime.lastError || !res) return;
         const user = res.user;
@@ -303,12 +293,12 @@
         }
       });
     });
-  };
+  }
 
   /**
    * 4. Settings Gear Button
    */
-  const initSettingsButton = () => {
+  function initSettingsButton() {
     const settingsBtn = document.getElementById("settingsBtn");
     settingsBtn?.addEventListener("click", () => {
       if (chrome.runtime.openOptionsPage) {
@@ -317,5 +307,22 @@
         window.open(chrome.runtime.getURL("dist/settings.html"));
       }
     });
-  };
+  }
+
+  /**
+   * Master initialization runner
+   */
+  function initAll() {
+    initWorkflows();
+    initGeminiSettings();
+    loadUserProfile();
+    initSettingsButton();
+  }
+
+  // Ensure DOM is ready before executing initialization
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initAll);
+  } else {
+    initAll();
+  }
 })();
