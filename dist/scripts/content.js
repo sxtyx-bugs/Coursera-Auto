@@ -2055,6 +2055,60 @@ ${cleanPromptData}`;
     }
 
     /**
+     * Determines whether an option input (radio button or checkbox) is truly visible
+     * and interactive on the page.
+     * Coursera CDS styles native inputs with opacity: 0 and width/height: 0 while rendering
+     * the visible interactive control within its parent label.
+     * This function checks label visibility and filters out actual honeypots and canaries.
+     */
+    function isOptionInputVisible(input) {
+      if (!input || !input.isConnected) return false;
+
+      const label = input.closest("label") ||
+                    input.closest('[role="radio"]') ||
+                    input.closest('[role="checkbox"]') ||
+                    input.closest('div[class*="option" i], div[class*="choice" i], div[class*="Radio" i], div[class*="Checkbox" i]') ||
+                    input.parentElement;
+
+      if (!label || !label.isConnected) return false;
+
+      // The label/parent itself must be visible
+      if (!isElementVisible(label)) return false;
+
+      // Check ancestors for hidden or off-screen honeypot styling
+      let curr = label;
+      while (curr && curr !== document.body && curr !== document) {
+        if (curr.getAttribute("aria-hidden") === "true" || curr.hasAttribute("hidden")) return false;
+        try {
+          const style = window.getComputedStyle(curr);
+          if (style.display === "none" || style.visibility === "hidden") return false;
+          if (style.position === "absolute" || style.position === "fixed") {
+            const left = parseFloat(style.left);
+            const top = parseFloat(style.top);
+            if (!isNaN(left) && (left < -500 || left > 50000)) return false;
+            if (!isNaN(top) && (top < -500 || top > 50000)) return false;
+          }
+        } catch (_) {}
+        curr = curr.parentElement;
+      }
+
+      // Check bounding rect of label
+      try {
+        const rect = label.getBoundingClientRect();
+        if (rect.width === 0 && rect.height === 0) return false;
+        if (rect.bottom < -50 || rect.right < -50) return false;
+      } catch (_) {}
+
+      // Filter out honeypot option text
+      try {
+        const optText = (label.textContent || "").trim();
+        if (optText && isHoneypotQuestion(optText)) return false;
+      } catch (_) {}
+
+      return true;
+    }
+
+    /**
      * Extracts visible text from an element while stripping invisible honeypots,
      * scripts, styles, and prompt injection canaries.
      */
@@ -2093,65 +2147,118 @@ ${cleanPromptData}`;
 
     /**
      * Finds visible quiz question containers on the page using resilient multi-selectors.
+     * Guarantees 1:1 question isolation and excludes outer submission part wrappers.
      */
     function findVisibleQuestionElements() {
       const candidateSelectors = [
-        'div[data-testid="part-Submission_Part"]',
         'div[data-testid="question-item"]',
-        'div[data-testid*="question"]',
-        'div[data-testid*="Question"]',
-        'div.c-question',
-        'div.c-question-part',
-        'div.rc-FormPart',
-        'div[class*="FormPart"]',
-        'div[class*="QuestionPart"]',
-        'div[class*="question-part"]',
-        'div[class*="questionContainer"]',
-        'div[class*="c-question"]',
+        'div[data-testid*="question-item"]',
+        'div[data-testid*="QuestionItem"]',
+        'div[data-testid*="question_"]',
+        'div[data-testid*="Question_"]',
         'fieldset[class*="question"]',
         'fieldset[aria-label*="Question" i]',
+        'fieldset',
         'div[role="group"][aria-label*="Question" i]',
+        'div[role="group"]',
+        'div.rc-FormPart',
+        'div[class*="rc-FormPart"]',
+        'div.c-question',
+        'div.c-question-part',
+        'div[class*="c-question"]',
+        'div[class*="questionContainer"]',
+        'div[class*="QuestionContainer"]',
         'div.css-1tfphom'
       ];
 
       for (const selector of candidateSelectors) {
         try {
           const elements = Array.from(document.querySelectorAll(selector)).filter(isElementVisible);
+          if (elements.length === 0) continue;
+
+          // Filter out containers that are not single question containers
           const valid = elements.filter(el => {
-            const hasInputs = el.querySelector('input[type="radio"], input[type="checkbox"], textarea, input[type="text"]');
-            return Boolean(hasInputs);
+            const hasChoice = Array.from(el.querySelectorAll('input[type="radio"], input[type="checkbox"]')).some(isOptionInputVisible);
+            const hasText = Array.from(el.querySelectorAll('textarea, input[type="text"]')).some(isElementVisible);
+            if (!hasChoice && !hasText) return false;
+
+            // An individual question container should NOT span multiple distinct radio groups
+            const radioNames = new Set(
+              Array.from(el.querySelectorAll('input[type="radio"]'))
+                .filter(isOptionInputVisible)
+                .map(r => r.name)
+                .filter(Boolean)
+            );
+            if (radioNames.size > 1) {
+              return false;
+            }
+
+            return true;
           });
-          if (valid.length > 0) {
-            return valid;
+
+          // Filter out any container that contains another valid container (keep innermost/leaf containers)
+          const leafElements = valid.filter(el => {
+            return !valid.some(other => other !== el && el.contains(other));
+          });
+
+          if (leafElements.length > 0) {
+            return leafElements;
           }
         } catch (_) {}
       }
 
-      // Fallback: search for fieldsets or groups containing radio/checkbox/textarea
-      try {
-        const fieldsets = Array.from(document.querySelectorAll("fieldset, div[role='group']")).filter(isElementVisible);
-        const validFieldsets = fieldsets.filter(el => el.querySelector('input[type="radio"], input[type="checkbox"], textarea'));
-        if (validFieldsets.length > 0) {
-          return validFieldsets;
-        }
-      } catch (_) {}
+      // Fallback: Group questions directly from visible inputs
+      return groupQuestionsByInputs();
+    }
 
-      // Ultimate fallback: collect closest containers of visible inputs
+    /**
+     * Fallback to group questions dynamically by radio input names and common parents.
+     */
+    function groupQuestionsByInputs() {
       try {
-        const allInputs = Array.from(document.querySelectorAll('input[type="radio"], input[type="checkbox"], textarea')).filter(isElementVisible);
-        const containerSet = new Set();
-        allInputs.forEach(input => {
-          const parentContainer = input.closest('[data-testid], fieldset, form, div.rc-FormPart, div[class*="part"], div[class*="question"], div[role="group"]') || input.parentElement?.parentElement;
-          if (parentContainer && isElementVisible(parentContainer)) {
-            containerSet.add(parentContainer);
+        const allInputs = Array.from(document.querySelectorAll('input[type="radio"], input[type="checkbox"], textarea, input[type="text"]')).filter(inp => {
+          if (inp.tagName === "TEXTAREA" || inp.type === "text") return isElementVisible(inp);
+          return isOptionInputVisible(inp);
+        });
+
+        if (allInputs.length === 0) return [];
+
+        const questionContainers = [];
+        const processedInputs = new Set();
+
+        // 1. Group radio buttons by name attribute
+        const radioGroups = new Map();
+        allInputs.forEach(inp => {
+          if (inp.type === "radio") {
+            const name = inp.name || "__unnamed__";
+            if (!radioGroups.has(name)) radioGroups.set(name, []);
+            radioGroups.get(name).push(inp);
           }
         });
-        if (containerSet.size > 0) {
-          return Array.from(containerSet);
-        }
-      } catch (_) {}
 
-      return [];
+        radioGroups.forEach((radios) => {
+          const container = radios[0].closest('fieldset, div[role="group"], div[data-testid*="question"], div.rc-FormPart, div[class*="question"], div[class*="part"]') || radios[0].parentElement?.parentElement;
+          if (container && isElementVisible(container) && !questionContainers.includes(container)) {
+            questionContainers.push(container);
+            radios.forEach(r => processedInputs.add(r));
+          }
+        });
+
+        // 2. Group checkboxes and text inputs
+        allInputs.forEach(inp => {
+          if (processedInputs.has(inp)) return;
+          const container = inp.closest('fieldset, div[role="group"], div[data-testid*="question"], div.rc-FormPart, div[class*="question"], div[class*="part"]') || inp.parentElement?.parentElement;
+          if (container && isElementVisible(container) && !questionContainers.includes(container)) {
+            questionContainers.push(container);
+            processedInputs.add(inp);
+          }
+        });
+
+        return questionContainers;
+      } catch (err) {
+        console.error("[Coursera Assistant] Error in groupQuestionsByInputs:", err);
+        return [];
+      }
     }
 
     function htmlToPlainText(html) {
@@ -2205,9 +2312,9 @@ ${cleanPromptData}`;
 
         const extracted = [];
         questionElements.forEach((qEl) => {
-          // Find all VISIBLE choice inputs
+          // Find all VISIBLE choice inputs (handling CDS styled opacity: 0 inputs)
           const allInputs = Array.from(qEl.querySelectorAll('input[type="radio"], input[type="checkbox"]'));
-          const visibleInputs = allInputs.filter(isElementVisible);
+          const visibleInputs = allInputs.filter(isOptionInputVisible);
           const isMcq = visibleInputs.length > 0;
           const options = [];
 
@@ -2432,6 +2539,149 @@ ${cleanPromptData}`;
       }
     }
 
+    /**
+     * Programmatically checks a radio or checkbox option in Coursera's React DOM.
+     * Sets native checked descriptor to bypass React's value tracking and dispatches
+     * complete mouse click sequence and change/input synthetic events.
+     */
+    function selectChoiceOption(optInput) {
+      if (!optInput) return;
+      const label = optInput.closest("label") || (optInput.id ? document.querySelector(`label[for="${optInput.id}"]`) : null);
+      const targetToScroll = label || optInput;
+
+      try {
+        targetToScroll.scrollIntoView({ block: "nearest", inline: "nearest" });
+      } catch (_) {}
+
+      try {
+        const proto = window.HTMLInputElement.prototype;
+        const nativeCheckedSetter = Object.getOwnPropertyDescriptor(proto, "checked")?.set;
+        if (nativeCheckedSetter) {
+          nativeCheckedSetter.call(optInput, true);
+        } else {
+          optInput.checked = true;
+        }
+      } catch (_) {
+        optInput.checked = true;
+      }
+
+      if (label) {
+        try {
+          label.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+          label.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+          label.click();
+        } catch (_) {
+          try { label.click(); } catch (_) {}
+        }
+      }
+
+      try {
+        optInput.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+        optInput.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+        optInput.click();
+      } catch (_) {
+        try { optInput.click(); } catch (_) {}
+      }
+
+      try {
+        optInput.dispatchEvent(new Event("input", { bubbles: true }));
+        optInput.dispatchEvent(new Event("change", { bubbles: true }));
+      } catch (_) {}
+    }
+
+    /**
+     * Programmatically unchecks an already-selected checkbox option if it is not a correct answer.
+     */
+    function uncheckChoiceOption(optInput) {
+      if (!optInput || !optInput.checked) return;
+      const label = optInput.closest("label") || (optInput.id ? document.querySelector(`label[for="${optInput.id}"]`) : null);
+
+      try {
+        const proto = window.HTMLInputElement.prototype;
+        const nativeCheckedSetter = Object.getOwnPropertyDescriptor(proto, "checked")?.set;
+        if (nativeCheckedSetter) {
+          nativeCheckedSetter.call(optInput, false);
+        } else {
+          optInput.checked = false;
+        }
+      } catch (_) {
+        optInput.checked = false;
+      }
+
+      if (label) {
+        try { label.click(); } catch (_) {}
+      }
+      try { optInput.click(); } catch (_) {}
+      try {
+        optInput.dispatchEvent(new Event("input", { bubbles: true }));
+        optInput.dispatchEvent(new Event("change", { bubbles: true }));
+      } catch (_) {}
+    }
+
+    /**
+     * Normalizes heterogeneous Gemini answer formats into standard indices, texts, and content.
+     */
+    function normalizeQuizAnswer(answer, totalOptionsCount) {
+      if (!answer) return { indices: [], texts: [], content: "" };
+
+      let indices = [];
+      let texts = [];
+      let content = "";
+
+      if (typeof answer === "string") {
+        content = answer;
+        texts.push(answer);
+      } else if (typeof answer.content === "string") {
+        content = answer.content;
+      } else if (typeof answer.text === "string") {
+        content = answer.text;
+      } else if (typeof answer.answer === "string") {
+        content = answer.answer;
+      }
+
+      const rawIndices = answer.correctOptionsIndex ??
+                         answer.correctOptionIndex ??
+                         answer.correct_options_index ??
+                         answer.correctIndex ??
+                         answer.correctIndices ??
+                         answer.indices ??
+                         (Array.isArray(answer.answer) && typeof answer.answer[0] === "number" ? answer.answer : null) ??
+                         (typeof answer.answer === "number" ? answer.answer : null);
+
+      if (Array.isArray(rawIndices)) {
+        indices = rawIndices.map(n => parseInt(n, 10)).filter(n => !isNaN(n));
+      } else if (rawIndices !== null && rawIndices !== undefined) {
+        const num = parseInt(rawIndices, 10);
+        if (!isNaN(num)) indices = [num];
+      }
+
+      // Convert 1-indexed to 0-indexed if no 0 is present and max equals options count
+      if (totalOptionsCount && totalOptionsCount > 0 && indices.length > 0) {
+        const hasZero = indices.some(i => i === 0);
+        const hasMax = indices.some(i => i === totalOptionsCount);
+        if (!hasZero && hasMax) {
+          indices = indices.map(i => i - 1);
+        }
+      }
+
+      const rawTexts = answer.correctOptions ??
+                       answer.correctOption ??
+                       answer.correct_options ??
+                       answer.correctText ??
+                       answer.correctAnswers ??
+                       (Array.isArray(answer.answer) && typeof answer.answer[0] === "string" ? answer.answer : null) ??
+                       (typeof answer.answer === "string" ? answer.answer : null);
+
+      if (Array.isArray(rawTexts)) {
+        texts = rawTexts.map(t => String(t).trim()).filter(Boolean);
+      } else if (rawTexts !== null && rawTexts !== undefined) {
+        const str = String(rawTexts).trim();
+        if (str) texts = [str];
+      }
+
+      return { indices, texts, content };
+    }
+
     function fillQuizAnswersInDOM(aiAnswers, onProgress) {
       if (!aiAnswers || !Array.isArray(aiAnswers) || aiAnswers.length === 0) return false;
 
@@ -2444,53 +2694,98 @@ ${cleanPromptData}`;
       const nativeInputSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
       const nativeTextareaSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
 
+      let totalMarkedCount = 0;
+
       questionElements.forEach((questionEl, index) => {
         if (typeof onProgress === "function") {
           onProgress(index + 1, questionElements.length);
         }
-        const answer = aiAnswers[index];
+
+        // Align question: check if prompt matches an answer entry, otherwise fallback to index
+        let answer = aiAnswers[index];
+        const promptEl = questionEl.querySelector(".c-question-prompt, [data-testid*='prompt'], [class*='prompt'], legend, h3, h4, p");
+        const qPrompt = promptEl ? getCleanVisibleText(promptEl) : "";
+
+        if (qPrompt) {
+          const promptMatch = aiAnswers.find(a => {
+            if (!a || !a.question || typeof a.question !== "string") return false;
+            const aQ = a.question.trim().toLowerCase();
+            const domQ = qPrompt.trim().toLowerCase();
+            return domQ.includes(aQ) || aQ.includes(domQ);
+          });
+          if (promptMatch) {
+            answer = promptMatch;
+          }
+        }
+
         if (!answer) return;
 
         // 1. Textarea / free response question
         const textInput = questionEl.querySelector('textarea, input[type="text"]');
-        if (textInput && answer.content && isElementVisible(textInput)) {
-          const setter = textInput.tagName === "TEXTAREA" ? nativeTextareaSetter : nativeInputSetter;
-          if (setter) {
-            setter.call(textInput, answer.content);
-          } else {
-            textInput.value = answer.content;
+        if (textInput && isElementVisible(textInput)) {
+          const normalized = normalizeQuizAnswer(answer);
+          if (normalized.content) {
+            const setter = textInput.tagName === "TEXTAREA" ? nativeTextareaSetter : nativeInputSetter;
+            if (setter) {
+              setter.call(textInput, normalized.content);
+            } else {
+              textInput.value = normalized.content;
+            }
+            textInput.dispatchEvent(new Event("input", { bubbles: true }));
+            textInput.dispatchEvent(new Event("change", { bubbles: true }));
+            totalMarkedCount++;
           }
-          textInput.dispatchEvent(new Event("input", { bubbles: true }));
-          textInput.dispatchEvent(new Event("change", { bubbles: true }));
           return;
         }
 
         // 2. Choice options (radio buttons and checkboxes)
         const visibleOptions = Array.from(questionEl.querySelectorAll('input[type="radio"], input[type="checkbox"]'))
-          .filter(isElementVisible);
-        const correctIndices = Array.isArray(answer.correctOptionsIndex) ? answer.correctOptionsIndex : [];
-        const correctTexts = Array.isArray(answer.correctOptions) ? answer.correctOptions : [];
+          .filter(isOptionInputVisible);
+
+        const normalized = normalizeQuizAnswer(answer, visibleOptions.length);
 
         visibleOptions.forEach((optInput, optIdx) => {
-          let isMatch = correctIndices.includes(optIdx);
+          let isMatch = normalized.indices.includes(optIdx);
 
           // Text-based fallback matching if index didn't match
-          if (!isMatch && correctTexts.length > 0) {
-            const label = optInput.closest("label") || optInput.parentElement;
-            const optText = (label?.textContent || "").trim().toLowerCase();
-            isMatch = correctTexts.some(ct => typeof ct === "string" && optText.includes(ct.trim().toLowerCase()));
+          if (!isMatch && normalized.texts.length > 0) {
+            const label = optInput.closest("label") || (optInput.id ? document.querySelector(`label[for="${optInput.id}"]`) : null) || optInput.parentElement;
+            const optCleanText = label ? getCleanVisibleText(label) : "";
+            if (optCleanText) {
+              const normOpt = optCleanText.toLowerCase().replace(/\s+/g, " ");
+              isMatch = normalized.texts.some(ct => {
+                if (typeof ct !== "string") return false;
+                const normCt = ct.trim().toLowerCase().replace(/\s+/g, " ");
+                return normOpt.includes(normCt) || normCt.includes(normOpt);
+              });
+            }
           }
 
-          if (isMatch && !optInput.checked) {
-            optInput.click();
-            optInput.dispatchEvent(new Event("input", { bubbles: true }));
-            optInput.dispatchEvent(new Event("change", { bubbles: true }));
+          if (optInput.type === "checkbox") {
+            if (isMatch && !optInput.checked) {
+              selectChoiceOption(optInput);
+              totalMarkedCount++;
+            } else if (!isMatch && optInput.checked) {
+              uncheckChoiceOption(optInput);
+            }
+          } else {
+            // Radio button
+            if (isMatch) {
+              selectChoiceOption(optInput);
+              totalMarkedCount++;
+            }
           }
         });
       });
 
-      showToast("Correct options have been selected.", "success");
-      return true;
+      if (totalMarkedCount > 0) {
+        showToast(`Selected ${totalMarkedCount} option${totalMarkedCount === 1 ? '' : 's'}.`, "success");
+      } else {
+        console.warn("[Coursera Assistant] Warning: 0 options could be marked in the DOM.");
+        showToast("Answers generated, but no matching options could be selected in the page.", "warning");
+      }
+
+      return totalMarkedCount > 0;
     }
 
     // -------------------------------------------------------------
