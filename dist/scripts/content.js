@@ -1638,57 +1638,65 @@
       }
 
       /**
-       * Performs fetch with automatic fallback to background service worker
-       * if direct content-script fetch fails due to page CSP or extension host permission.
+       * Performs fetch via the background service worker proxy.
+       * Cross-origin requests from content scripts on Coursera.org are subject to
+       * page Content Security Policy (CSP), which causes direct fetch() to hang indefinitely.
+       * Proxying through the background worker bypasses page CSP and uses extension host permissions.
        */
       async performRequest(url, requestOptions) {
-        try {
-          return await fetch(url, requestOptions);
-        } catch (fetchErr) {
-          console.error(`[QUIZ GEMINI DEBUG] Direct fetch failed: ${fetchErr.name}: ${fetchErr.message}`);
-
-          if (typeof chrome !== "undefined" && chrome?.runtime?.sendMessage) {
-            try {
-              console.log("[QUIZ GEMINI DEBUG] Attempting background transport fallback...");
-              const bgRes = await new Promise((resolve, reject) => {
-                chrome.runtime.sendMessage(
-                  {
-                    action: "GEMINI_PROXY_FETCH",
-                    payload: {
-                      url: url,
-                      options: requestOptions
-                    }
-                  },
-                  (resp) => {
-                    if (chrome.runtime.lastError) {
-                      return reject(new Error(chrome.runtime.lastError.message));
-                    }
-                    if (!resp) {
-                      return reject(new Error("Empty response from background service worker"));
-                    }
-                    resolve(resp);
+        if (typeof chrome !== "undefined" && chrome?.runtime?.sendMessage) {
+          try {
+            console.log("[QUIZ GEMINI DEBUG] Sending request via background service worker proxy...");
+            const bgRes = await new Promise((resolve, reject) => {
+              const timer = setTimeout(() => reject(new Error("Background service worker response timed out")), 30000);
+              chrome.runtime.sendMessage(
+                {
+                  action: "GEMINI_PROXY_FETCH",
+                  payload: {
+                    url: url,
+                    options: requestOptions
                   }
-                );
-              });
+                },
+                (resp) => {
+                  clearTimeout(timer);
+                  if (chrome.runtime.lastError) {
+                    return reject(new Error(chrome.runtime.lastError.message));
+                  }
+                  if (!resp) {
+                    return reject(new Error("Empty response from background service worker"));
+                  }
+                  resolve(resp);
+                }
+              );
+            });
 
-              if (bgRes.error) {
-                console.error(`[QUIZ GEMINI DEBUG] Background transport fallback failed: ${bgRes.error}`);
-                throw new Error(`Gemini transport error: Direct fetch failed (${fetchErr.message}) and background fallback failed (${bgRes.error})`);
-              }
-
-              return {
-                ok: bgRes.ok,
-                status: bgRes.status,
-                statusText: bgRes.statusText,
-                text: async () => bgRes.text,
-                json: async () => JSON.parse(bgRes.text)
-              };
-            } catch (bgErr) {
-              console.error(`[QUIZ GEMINI DEBUG] Background fallback exception: ${bgErr.message}`);
-              throw new Error(`Gemini network/transport error: Direct fetch failed (${fetchErr.message}) and background fallback failed (${bgErr.message})`);
+            if (bgRes.error) {
+              console.error(`[QUIZ GEMINI DEBUG] Background transport error: ${bgRes.error}`);
+              throw new Error(`Gemini transport error: ${bgRes.error}`);
             }
-          }
 
+            console.log(`[QUIZ GEMINI DEBUG] Background proxy returned HTTP ${bgRes.status}`);
+            return {
+              ok: bgRes.ok,
+              status: bgRes.status,
+              statusText: bgRes.statusText,
+              text: async () => bgRes.text,
+              json: async () => JSON.parse(bgRes.text)
+            };
+          } catch (bgErr) {
+            console.warn(`[QUIZ GEMINI DEBUG] Background transport failed: ${bgErr.message}. Attempting direct fetch with timeout...`);
+          }
+        }
+
+        // Direct fetch fallback with strict 12-second timeout to prevent indefinite CSP hanging
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 12000);
+        try {
+          const directRes = await fetch(url, { ...requestOptions, signal: controller.signal });
+          clearTimeout(timeoutId);
+          return directRes;
+        } catch (fetchErr) {
+          clearTimeout(timeoutId);
           throw new Error(`Gemini network/transport error: ${fetchErr.message}`);
         }
       }

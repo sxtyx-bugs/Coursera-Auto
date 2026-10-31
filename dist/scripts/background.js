@@ -293,7 +293,10 @@
             sendResponse({ error: "Unauthorized destination host" });
             return;
           }
-          const fetchRes = await fetch(url, options || {});
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 35000);
+          const fetchRes = await fetch(url, { ...(options || {}), signal: controller.signal });
+          clearTimeout(timeoutId);
           const bodyText = await fetchRes.text();
           sendResponse({
             ok: fetchRes.ok,
