@@ -2063,8 +2063,10 @@ ${cleanPromptData}`;
      */
     function isOptionInputVisible(input) {
       if (!input || !input.isConnected) return false;
+      if (input.disabled) return false;
 
       const label = input.closest("label") ||
+                    (input.id ? document.querySelector(`label[for="${input.id}"]`) : null) ||
                     input.closest('[role="radio"]') ||
                     input.closest('[role="checkbox"]') ||
                     input.closest('div[class*="option" i], div[class*="choice" i], div[class*="Radio" i], div[class*="Checkbox" i]') ||
@@ -2072,8 +2074,14 @@ ${cleanPromptData}`;
 
       if (!label || !label.isConnected) return false;
 
-      // The label/parent itself must be visible
-      if (!isElementVisible(label)) return false;
+      // Check if hidden by style or attributes
+      if (label.getAttribute("aria-hidden") === "true" || label.hasAttribute("hidden")) return false;
+      if (input.getAttribute("aria-hidden") === "true" || input.hasAttribute("hidden")) return false;
+
+      try {
+        const lStyle = window.getComputedStyle(label);
+        if (lStyle.display === "none" || lStyle.visibility === "hidden" || lStyle.opacity === "0") return false;
+      } catch (_) {}
 
       // Check ancestors for hidden or off-screen honeypot styling
       let curr = label;
@@ -2092,10 +2100,13 @@ ${cleanPromptData}`;
         curr = curr.parentElement;
       }
 
-      // Check bounding rect of label
+      // Check bounding rect of label (allow display: contents which has 0x0 rect)
       try {
         const rect = label.getBoundingClientRect();
-        if (rect.width === 0 && rect.height === 0) return false;
+        if (rect.width === 0 && rect.height === 0) {
+          const lStyle = window.getComputedStyle(label);
+          if (lStyle.display !== "contents") return false;
+        }
         if (rect.bottom < -50 || rect.right < -50) return false;
       } catch (_) {}
 
@@ -2212,6 +2223,43 @@ ${cleanPromptData}`;
     }
 
     /**
+     * Finds the lowest common container for a group of inputs belonging to the same question.
+     * Ensures container does not leak into other questions or wrap the entire quiz.
+     */
+    function findCommonContainerForInputs(inputs) {
+      if (!inputs || inputs.length === 0) return null;
+      if (inputs.length === 1) {
+        return inputs[0].closest('fieldset, div[role="group"], div[data-testid*="question" i], div.rc-FormPart, div[class*="FormPart"], div.c-question') ||
+               inputs[0].parentElement?.parentElement?.parentElement ||
+               inputs[0].parentElement?.parentElement ||
+               inputs[0].parentElement;
+      }
+
+      let ancestor = inputs[0].parentElement;
+      let bestMatch = null;
+
+      while (ancestor && ancestor !== document.body && ancestor !== document) {
+        const containsAll = inputs.every(inp => ancestor.contains(inp));
+        if (containsAll) {
+          // Check if this ancestor spans across OTHER radio questions
+          const otherRadios = Array.from(ancestor.querySelectorAll('input[type="radio"]'))
+            .filter(r => r.name && r.name !== inputs[0].name && isOptionInputVisible(r));
+          if (otherRadios.length === 0) {
+            bestMatch = ancestor;
+            break;
+          }
+          break;
+        }
+        ancestor = ancestor.parentElement;
+      }
+
+      return bestMatch ||
+             inputs[0].closest('fieldset, div[role="group"], div[data-testid*="question" i], div.rc-FormPart, div[class*="FormPart"], div.c-question') ||
+             inputs[0].parentElement?.parentElement?.parentElement ||
+             inputs[0].parentElement?.parentElement;
+    }
+
+    /**
      * Fallback to group questions dynamically by radio input names and common parents.
      */
     function groupQuestionsByInputs() {
@@ -2237,20 +2285,50 @@ ${cleanPromptData}`;
         });
 
         radioGroups.forEach((radios) => {
-          const container = radios[0].closest('fieldset, div[role="group"], div[data-testid*="question"], div.rc-FormPart, div[class*="question"], div[class*="part"]') || radios[0].parentElement?.parentElement;
-          if (container && isElementVisible(container) && !questionContainers.includes(container)) {
+          const container = findCommonContainerForInputs(radios);
+          if (container && !questionContainers.includes(container)) {
             questionContainers.push(container);
             radios.forEach(r => processedInputs.add(r));
           }
         });
 
-        // 2. Group checkboxes and text inputs
+        // 2. Group checkboxes by common parent container
+        const checkboxGroups = new Map();
+        allInputs.forEach(inp => {
+          if (inp.type === "checkbox") {
+            const container = inp.closest('fieldset, div[role="group"], div[data-testid*="question" i], div.rc-FormPart, div[class*="FormPart"], div.c-question') ||
+                              inp.parentElement?.parentElement?.parentElement ||
+                              inp.parentElement?.parentElement;
+            if (container) {
+              if (!checkboxGroups.has(container)) checkboxGroups.set(container, []);
+              checkboxGroups.get(container).push(inp);
+            }
+          }
+        });
+
+        checkboxGroups.forEach((checkboxes, container) => {
+          if (!questionContainers.includes(container)) {
+            questionContainers.push(container);
+            checkboxes.forEach(c => processedInputs.add(c));
+          }
+        });
+
+        // 3. Any remaining text inputs or unassigned inputs
         allInputs.forEach(inp => {
           if (processedInputs.has(inp)) return;
-          const container = inp.closest('fieldset, div[role="group"], div[data-testid*="question"], div.rc-FormPart, div[class*="question"], div[class*="part"]') || inp.parentElement?.parentElement;
-          if (container && isElementVisible(container) && !questionContainers.includes(container)) {
+          const container = findCommonContainerForInputs([inp]);
+          if (container && !questionContainers.includes(container)) {
             questionContainers.push(container);
             processedInputs.add(inp);
+          }
+        });
+
+        // Sort question containers in visual DOM order
+        questionContainers.sort((a, b) => {
+          try {
+            return (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) ? -1 : 1;
+          } catch (_) {
+            return 0;
           }
         });
 
@@ -2541,8 +2619,7 @@ ${cleanPromptData}`;
 
     /**
      * Programmatically checks a radio or checkbox option in Coursera's React DOM.
-     * Sets native checked descriptor to bypass React's value tracking and dispatches
-     * complete mouse click sequence and change/input synthetic events.
+     * Prevents double-clicking and guarantees React state synchronization.
      */
     function selectChoiceOption(optInput) {
       if (!optInput) return;
@@ -2553,36 +2630,40 @@ ${cleanPromptData}`;
         targetToScroll.scrollIntoView({ block: "nearest", inline: "nearest" });
       } catch (_) {}
 
-      try {
-        const proto = window.HTMLInputElement.prototype;
-        const nativeCheckedSetter = Object.getOwnPropertyDescriptor(proto, "checked")?.set;
-        if (nativeCheckedSetter) {
-          nativeCheckedSetter.call(optInput, true);
-        } else {
-          optInput.checked = true;
-        }
-      } catch (_) {
-        optInput.checked = true;
-      }
-
+      // 1. If wrapped by label, click the label (standard user interaction)
       if (label) {
         try {
           label.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
           label.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
           label.click();
+        } catch (_) {}
+      }
+
+      // 2. If not checked after label click (or no label), click the input directly
+      if (!optInput.checked) {
+        try {
+          optInput.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+          optInput.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+          optInput.click();
+        } catch (_) {}
+      }
+
+      // 3. Fallback: if STILL not checked (e.g. pointer-events: none or styled overlay)
+      if (!optInput.checked) {
+        try {
+          const proto = window.HTMLInputElement.prototype;
+          const nativeCheckedSetter = Object.getOwnPropertyDescriptor(proto, "checked")?.set;
+          if (nativeCheckedSetter) {
+            nativeCheckedSetter.call(optInput, true);
+          } else {
+            optInput.checked = true;
+          }
         } catch (_) {
-          try { label.click(); } catch (_) {}
+          optInput.checked = true;
         }
       }
 
-      try {
-        optInput.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
-        optInput.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
-        optInput.click();
-      } catch (_) {
-        try { optInput.click(); } catch (_) {}
-      }
-
+      // 4. Always notify React synthetic event system
       try {
         optInput.dispatchEvent(new Event("input", { bubbles: true }));
         optInput.dispatchEvent(new Event("change", { bubbles: true }));
@@ -2596,22 +2677,36 @@ ${cleanPromptData}`;
       if (!optInput || !optInput.checked) return;
       const label = optInput.closest("label") || (optInput.id ? document.querySelector(`label[for="${optInput.id}"]`) : null);
 
-      try {
-        const proto = window.HTMLInputElement.prototype;
-        const nativeCheckedSetter = Object.getOwnPropertyDescriptor(proto, "checked")?.set;
-        if (nativeCheckedSetter) {
-          nativeCheckedSetter.call(optInput, false);
-        } else {
-          optInput.checked = false;
-        }
-      } catch (_) {
-        optInput.checked = false;
+      if (label) {
+        try {
+          label.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+          label.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+          label.click();
+        } catch (_) {}
       }
 
-      if (label) {
-        try { label.click(); } catch (_) {}
+      if (optInput.checked) {
+        try {
+          optInput.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+          optInput.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+          optInput.click();
+        } catch (_) {}
       }
-      try { optInput.click(); } catch (_) {}
+
+      if (optInput.checked) {
+        try {
+          const proto = window.HTMLInputElement.prototype;
+          const nativeCheckedSetter = Object.getOwnPropertyDescriptor(proto, "checked")?.set;
+          if (nativeCheckedSetter) {
+            nativeCheckedSetter.call(optInput, false);
+          } else {
+            optInput.checked = false;
+          }
+        } catch (_) {
+          optInput.checked = false;
+        }
+      }
+
       try {
         optInput.dispatchEvent(new Event("input", { bubbles: true }));
         optInput.dispatchEvent(new Event("change", { bubbles: true }));
