@@ -850,14 +850,67 @@
     };
 
     /**
-     * Helper to load course materials catalog
+     * Resiliently determines whether a course item represents reading material.
+     * Supports Coursera's traditional 'supplement' typeName, modern 'reading'/'article'/'text' variants,
+     * case insensitivity, nested metadata, and fallback title/slug pattern matching.
+     */
+    function isReadingItem(item) {
+      if (!item) return false;
+
+      const typeCandidates = [
+        item.contentSummary?.typeName,
+        item.typeName,
+        item.contentSummary?.definition?.typeName,
+        item.itemType,
+        item.type,
+        item.content?.typeName,
+        item.itemMetadata?.contentSummary?.typeName,
+        item.itemMetadata?.typeName
+      ].filter(Boolean).map(t => String(t).toLowerCase().trim());
+
+      const readingTypes = [
+        "supplement",
+        "reading",
+        "readingmaterial",
+        "article",
+        "text",
+        "textbook",
+        "ungradedassignment",
+        "resource"
+      ];
+
+      if (typeCandidates.some(t => readingTypes.includes(t))) {
+        return true;
+      }
+
+      // Title & slug inspection (e.g. when Naptime API omits contentSummary)
+      const name = (item.name || "").toLowerCase().trim();
+      const slug = (item.slug || "").toLowerCase().trim();
+
+      if (/^(reading|article|text)[\s:\-–—]/i.test(name) || name.includes("[reading]") || name.includes("(reading)")) {
+        return true;
+      }
+      if (/^reading[\-_]/i.test(slug) || slug.includes("-reading-") || slug.endsWith("-reading")) {
+        return true;
+      }
+
+      return false;
+    }
+
+    /**
+     * Helper to load course materials catalog with full fields requested
      */
     const ensureCourseMaterials = async (courseSlug) => {
       if (!cachedCourseMaterials?.linked) {
         showToast("Checking course materials...", "info");
         try {
-          const apiUrl = `/api/onDemandCourseMaterials.v2/?q=slug&slug=${encodeURIComponent(courseSlug)}&includes=modules,lessons,items,gradingParameters`;
-          const resp = await fetch(apiUrl, { credentials: "include" });
+          // Primary: request with fields so contentSummary and itemType are not omitted by Coursera Naptime
+          let apiUrl = `/api/onDemandCourseMaterials.v2/?q=slug&slug=${encodeURIComponent(courseSlug)}&includes=modules,lessons,items,gradingParameters&fields=onDemandCourseMaterialItems.v2(name,slug,timeCommitment,contentSummary,itemType),onDemandCourseMaterialItems.v1(name,slug,timeCommitment,contentSummary,itemType)`;
+          let resp = await fetch(apiUrl, { credentials: "include" });
+          if (!resp.ok) {
+            apiUrl = `/api/onDemandCourseMaterials.v2/?q=slug&slug=${encodeURIComponent(courseSlug)}&includes=modules,lessons,items,gradingParameters`;
+            resp = await fetch(apiUrl, { credentials: "include" });
+          }
           if (resp.ok) {
             cachedCourseMaterials = await resp.json();
           }
@@ -868,8 +921,7 @@
 
     /**
      * Completes course reading materials (supplements) via onDemandSupplementCompletions.v1
-     * with robust numeric userId support, source-level diagnostics, and verified
-     * server response semantics.
+     * with multi-source item discovery (API catalog + DOM links + active page button).
      */
     const completeReadingMaterials = async () => {
       const courseSlug = window.location.pathname.match(/\/learn\/([^/]+)/)?.[1];
@@ -878,19 +930,43 @@
         return;
       }
 
-      const linked = await ensureCourseMaterials(courseSlug);
-      if (!linked) {
-        showToast("Coursera didn't return course materials. Please reload the page.", "error");
-        return;
-      }
+      // 1. Scan DOM for reading links and active page reading completion
+      const domReadingItemIds = new Set();
+      try {
+        const domReadingLinks = Array.from(document.querySelectorAll('a[href*="/supplement/"], a[href*="/reading/"]'));
+        domReadingLinks.forEach(link => {
+          const href = link.getAttribute("href") || "";
+          const match = href.match(/\/(supplement|reading)\/([^/?#]+)/);
+          if (match && match[2]) {
+            domReadingItemIds.add(match[2]);
+          }
+        });
 
-      const gradingParams = linked["onDemandGradingParameters.v1"];
+        // Current page check if on a reading/supplement page
+        const currentPathMatch = window.location.pathname.match(/\/(supplement|reading)\/([^/?#]+)/);
+        if (currentPathMatch && currentPathMatch[2]) {
+          domReadingItemIds.add(currentPathMatch[2]);
+        }
+
+        // Click DOM "Mark as completed" button if present on active page
+        const allButtons = Array.from(document.querySelectorAll("button, [role='button']"));
+        for (const btn of allButtons) {
+          const text = (btn.innerText || btn.textContent || "").trim().toLowerCase();
+          if (text === "mark as completed" || text === "mark as complete" || text.includes("mark as complete")) {
+            try {
+              btn.click();
+              console.log("[READING DIAGNOSTICS] Clicked active page 'Mark as complete' button.");
+            } catch (_) {}
+            break;
+          }
+        }
+      } catch (_) {}
+
+      // 2. Load Course Materials API catalog
+      const linked = await ensureCourseMaterials(courseSlug);
+      const gradingParams = linked?.["onDemandGradingParameters.v1"];
       const courseId = gradingParams?.[0]?.id || currentCourseId;
-      if (!courseId) {
-        showToast("Unable to find course details on this page.", "error");
-        return;
-      }
-      currentCourseId = courseId;
+      currentCourseId = courseId || currentCourseId;
 
       const rawUserId = await resolveUserId();
       if (!rawUserId) {
@@ -901,27 +977,46 @@
       // Coursera Naptime schema requires numeric Long userId
       const numericUserId = !isNaN(Number(rawUserId)) ? Number(rawUserId) : rawUserId;
 
-      const items = linked["onDemandCourseMaterialItems.v2"] || linked["onDemandCourseMaterialItems.v1"] || [];
-      const readingItems = items.filter(item => {
-        const typeName = item.contentSummary?.typeName || item.typeName;
-        return typeName === "supplement";
-      });
+      // Collect items from all possible collections in linked data
+      const items = [
+        ...(linked?.["onDemandCourseMaterialItems.v2"] || []),
+        ...(linked?.["onDemandCourseMaterialItems.v1"] || []),
+        ...(linked?.["items"] || []),
+        ...(linked?.["onDemandSupplements.v1"] || []),
+        ...(cachedCourseMaterials?.elements?.[0]?.items || [])
+      ];
 
-      // Source-level diagnostics
-      console.log(`[READING DIAGNOSTICS] Total syllabus items: ${items.length}`);
-      console.log(`[READING DIAGNOSTICS] Supplement items discovered: ${readingItems.length}`);
+      // Deduplicate items by id
+      const uniqueItemsMap = new Map();
+      items.forEach(it => {
+        if (it?.id && !uniqueItemsMap.has(it.id)) {
+          uniqueItemsMap.set(it.id, it);
+        }
+      });
+      const uniqueItems = Array.from(uniqueItemsMap.values());
+
+      // Filter reading/supplement items using robust detector
+      const detectedReadingItems = uniqueItems.filter(isReadingItem);
+      detectedReadingItems.forEach(it => domReadingItemIds.add(it.id));
+
+      // Diagnostics
+      console.log(`[READING DIAGNOSTICS] Total syllabus items: ${uniqueItems.length}`);
+      console.log(`[READING DIAGNOSTICS] Detected reading items from API: ${detectedReadingItems.length}`);
+      console.log(`[READING DIAGNOSTICS] Total unique reading IDs (API + DOM): ${domReadingItemIds.size}`);
+      console.log(`[READING DIAGNOSTICS] Reading item IDs:`, Array.from(domReadingItemIds));
       console.log(`[READING DIAGNOSTICS] CourseId: ${courseId}`);
       console.log(`[READING DIAGNOSTICS] UserId type: ${typeof numericUserId}`);
-      console.log(`[READING DIAGNOSTICS] Reading item IDs:`, readingItems.map(i => i.id));
 
-      if (readingItems.length === 0) {
+      const targetItemIds = Array.from(domReadingItemIds);
+
+      if (targetItemIds.length === 0) {
         showToast("No reading materials found in this course syllabus.", "info");
         return;
       }
 
-      showToast(`Completing ${readingItems.length} reading materials...`, "info");
+      showToast(`Completing ${targetItemIds.length} reading material${targetItemIds.length === 1 ? '' : 's'}...`, "info");
 
-      const results = await Promise.all(readingItems.map(async item => {
+      const results = await Promise.all(targetItemIds.map(async itemId => {
         try {
           // Primary attempt with typed payload (numeric userId)
           let res = await fetch("https://www.coursera.org/api/onDemandSupplementCompletions.v1", {
@@ -931,15 +1026,15 @@
             body: JSON.stringify({
               userId: numericUserId,
               courseId: courseId,
-              itemId: item.id
+              itemId: itemId
             })
           });
 
-          console.log(`[READING DIAGNOSTICS] Item ${item.id} completion HTTP status: ${res.status} (${res.statusText})`);
+          console.log(`[READING DIAGNOSTICS] Item ${itemId} completion HTTP status: ${res.status} (${res.statusText})`);
 
           // If numeric userId failed with 400 Bad Request, attempt fallback with string userId
           if (!res.ok && res.status === 400) {
-            console.log(`[READING DIAGNOSTICS] Retrying item ${item.id} with string userId fallback...`);
+            console.log(`[READING DIAGNOSTICS] Retrying item ${itemId} with string userId fallback...`);
             const fallbackRes = await fetch("https://www.coursera.org/api/onDemandSupplementCompletions.v1", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -947,10 +1042,10 @@
               body: JSON.stringify({
                 userId: String(rawUserId),
                 courseId: courseId,
-                itemId: item.id
+                itemId: itemId
               })
             });
-            console.log(`[READING DIAGNOSTICS] Item ${item.id} fallback HTTP status: ${fallbackRes.status}`);
+            console.log(`[READING DIAGNOSTICS] Item ${itemId} fallback HTTP status: ${fallbackRes.status}`);
             if (fallbackRes.ok) {
               res = fallbackRes;
             }
@@ -959,21 +1054,21 @@
           // Verified server response semantics (HTTP 200/201/204)
           return res.ok && res.status >= 200 && res.status < 300;
         } catch (err) {
-          console.log(`[READING DIAGNOSTICS] Item ${item.id} completion exception:`, err.message);
+          console.log(`[READING DIAGNOSTICS] Item ${itemId} completion exception:`, err.message);
           return false;
         }
       }));
 
       const succeeded = results.filter(Boolean).length;
-      console.log(`[READING DIAGNOSTICS] Completion result: ${succeeded}/${readingItems.length} succeeded`);
+      console.log(`[READING DIAGNOSTICS] Completion result: ${succeeded}/${targetItemIds.length} succeeded`);
 
       if (succeeded === 0) {
-        showToast(`Reading Material completion failed (0/${readingItems.length})`, "error");
-      } else if (succeeded === readingItems.length) {
-        showToast(`✓ Reading Material completed (${succeeded}/${readingItems.length})`, "success");
+        showToast(`Reading Material completion failed (0/${targetItemIds.length})`, "error");
+      } else if (succeeded === targetItemIds.length) {
+        showToast(`✓ Reading Material completed (${succeeded}/${targetItemIds.length})`, "success");
         setTimeout(() => window.location.reload(), 1500);
       } else {
-        showToast(`✓ Reading Material partially completed (${succeeded}/${readingItems.length})`, "warn");
+        showToast(`✓ Reading Material partially completed (${succeeded}/${targetItemIds.length})`, "warn");
         setTimeout(() => window.location.reload(), 1500);
       }
     };
@@ -1375,7 +1470,7 @@
           }
           showToast("All lecture videos completed.", "success");
         } else if (batchType === "readingMaterial") {
-          const supplementItems = allItems.filter(item => item.contentSummary?.typeName === "supplement");
+          const supplementItems = allItems.filter(isReadingItem);
           if (supplementItems.length > 0) {
             await Promise.all(supplementItems.map(item => {
               return fetch("https://www.coursera.org/api/onDemandSupplementCompletions.v1", {
