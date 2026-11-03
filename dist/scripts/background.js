@@ -294,7 +294,8 @@
             return;
           }
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 35000);
+          // Set to 90 seconds to allow deep reasoning / thinking models to finish full multi-question batches
+          const timeoutId = setTimeout(() => controller.abort(), 90000);
           const fetchRes = await fetch(url, { ...(options || {}), signal: controller.signal });
           clearTimeout(timeoutId);
           const bodyText = await fetchRes.text();
@@ -384,11 +385,16 @@
         chrome.runtime.lastError;
       });
 
-      // Auto-Quiz trigger: if on coursera.org/learn and pathname ends with 'attempt'
+      // Auto-Quiz trigger: if on coursera.org/learn and on an attempt or quiz/exam overview page
       if (tab.url.startsWith("https://www.coursera.org/learn")) {
         try {
           const urlpath = new URL(tab.url).pathname;
-          if (urlpath.endsWith("attempt")) {
+          if (
+            urlpath.endsWith("attempt") ||
+            urlpath.includes("/exam/") ||
+            urlpath.includes("/quiz/") ||
+            urlpath.includes("/assignment-submission/")
+          ) {
             chrome.tabs.sendMessage(tabId, "attempt", function () {
               chrome.runtime.lastError;
             });

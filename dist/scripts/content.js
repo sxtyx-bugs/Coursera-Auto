@@ -1743,7 +1743,7 @@
           try {
             console.log("[QUIZ GEMINI DEBUG] Sending request via background service worker proxy...");
             const bgRes = await new Promise((resolve, reject) => {
-              const timer = setTimeout(() => reject(new Error("Background service worker response timed out")), 30000);
+              const timer = setTimeout(() => reject(new Error("Background service worker response timed out after 90s")), 90000);
               chrome.runtime.sendMessage(
                 {
                   action: "GEMINI_PROXY_FETCH",
@@ -1779,11 +1779,17 @@
               json: async () => JSON.parse(bgRes.text)
             };
           } catch (bgErr) {
-            console.warn(`[QUIZ GEMINI DEBUG] Background transport failed: ${bgErr.message}. Attempting direct fetch with timeout...`);
+            console.error(`[QUIZ GEMINI DEBUG] Background transport failed: ${bgErr.message}`);
+            // On Coursera, page CSP explicitly blocks cross-origin requests to Google APIs.
+            // Attempting direct fetch here will hang indefinitely or fail with CSP violation.
+            // Throw the clear background error directly instead of stalling.
+            if (typeof window !== "undefined" && window?.location?.hostname?.includes("coursera.org")) {
+              throw bgErr;
+            }
           }
         }
 
-        // Direct fetch fallback with strict 12-second timeout to prevent indefinite CSP hanging
+        // Direct fetch fallback with strict 12-second timeout (for testing outside Coursera)
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 12000);
         try {
@@ -1927,31 +1933,42 @@ ${cleanPromptData}`;
         if (!response.ok) {
           const inspected = await inspectResponse(response);
 
-          // CASE A: Model unavailable / HTTP 404 (and not already default)
-          if (response.status === 404 && activeModel !== GeminiAI.DEFAULT_MODEL) {
-            const fallbackMsg = `Selected Gemini model is unavailable. Switching to ${GeminiAI.DEFAULT_MODEL}...`;
-            console.warn(`[QUIZ MODEL] ${fallbackMsg}`);
-            if (typeof showToast === "function") {
-              showToast(fallbackMsg, "info");
-            }
-            if (typeof notifyQuizProgress === "function") {
-              notifyQuizProgress("solving", {
-                message: fallbackMsg,
-                model: GeminiAI.DEFAULT_MODEL
-              });
+          // CASE A: Model unavailable / HTTP 404
+          if (response.status === 404) {
+            let nextModel = null;
+            if (activeModel !== GeminiAI.DEFAULT_MODEL) {
+              nextModel = GeminiAI.DEFAULT_MODEL;
+            } else if (activeModel !== "gemini-2.0-flash") {
+              nextModel = "gemini-2.0-flash";
+            } else if (activeModel !== "gemini-1.5-flash") {
+              nextModel = "gemini-1.5-flash";
             }
 
-            if (typeof chrome !== "undefined" && chrome?.storage?.local?.set) {
-              chrome.storage.local.set({ model: GeminiAI.DEFAULT_MODEL });
+            if (nextModel) {
+              const fallbackMsg = `Selected Gemini model is unavailable. Switching to ${nextModel}...`;
+              console.warn(`[QUIZ MODEL] ${fallbackMsg}`);
+              if (typeof showToast === "function") {
+                showToast(fallbackMsg, "info");
+              }
+              if (typeof notifyQuizProgress === "function") {
+                notifyQuizProgress("solving", {
+                  message: fallbackMsg,
+                  model: nextModel
+                });
+              }
+
+              if (typeof chrome !== "undefined" && chrome?.storage?.local?.set) {
+                chrome.storage.local.set({ model: nextModel });
+              }
+
+              this.model = nextModel;
+              this.rawModel = nextModel;
+              activeModel = nextModel;
+              endpoint = `${this.baseUrl}/${activeModel}:generateContent`;
+              url = `${endpoint}?key=${encodeURIComponent(this.apiKey)}`;
+
+              response = await this.performRequest(url, requestOptions);
             }
-
-            this.model = GeminiAI.DEFAULT_MODEL;
-            this.rawModel = GeminiAI.DEFAULT_MODEL;
-            activeModel = GeminiAI.DEFAULT_MODEL;
-            endpoint = `${this.baseUrl}/${activeModel}:generateContent`;
-            url = `${endpoint}?key=${encodeURIComponent(this.apiKey)}`;
-
-            response = await this.performRequest(url, requestOptions);
           }
           // CASE C: HTTP 429 with quota limit 0 (and not already default)
           else if (response.status === 429 && inspected.isLimitZero && activeModel !== GeminiAI.DEFAULT_MODEL) {
@@ -2580,6 +2597,298 @@ ${cleanPromptData}`;
       }
     }
 
+    /**
+     * Finds the start/resume assignment button on a quiz or exam overview page.
+     */
+    function findQuizStartButton() {
+      const startButtonSelectors = [
+        'button[data-testid="start-assignment-button"]',
+        'a[data-testid="start-assignment-button"]',
+        'button[data-testid="resume-assignment-button"]',
+        'a[data-testid="resume-assignment-button"]',
+        'button[data-testid="start-quiz-button"]',
+        'a[data-testid="start-quiz-button"]',
+        'button[data-testid*="start" i]',
+        'button[data-testid*="resume" i]',
+        'a[data-testid*="start" i]',
+        'a[data-testid*="resume" i]',
+        'a[href$="/attempt"]',
+        'button.cds-button'
+      ];
+
+      for (const sel of startButtonSelectors) {
+        try {
+          const elements = Array.from(document.querySelectorAll(sel));
+          for (const el of elements) {
+            if (!isElementVisible(el)) continue;
+            const text = (el.innerText || el.textContent || "").trim();
+            if (
+              /^(start\s+assignment|start\s+quiz|start|resume\s+assignment|resume\s+quiz|resume|take\s+quiz|begin\s+assignment|begin\s+quiz)$/i.test(text) ||
+              el.getAttribute("data-testid") === "start-assignment-button" ||
+              el.getAttribute("data-testid") === "resume-assignment-button" ||
+              el.getAttribute("href")?.endsWith("/attempt")
+            ) {
+              return el;
+            }
+          }
+        } catch (_) {}
+      }
+
+      // Broad button search by text
+      const allButtons = Array.from(document.querySelectorAll("button, a.cds-button"));
+      for (const btn of allButtons) {
+        if (!isElementVisible(btn)) continue;
+        const text = (btn.innerText || btn.textContent || "").trim();
+        if (/^(start\s+assignment|start\s+quiz|start|resume\s+assignment|resume\s+quiz|resume|take\s+quiz|begin\s+assignment|begin\s+quiz)$/i.test(text)) {
+          return btn;
+        }
+      }
+      return null;
+    }
+
+    /**
+     * Handles pre-quiz confirmation modal dialogs (e.g. "Continue", "Start", "Start attempt").
+     */
+    async function handlePreQuizModals() {
+      const dialogSelectors = [
+        'div[role="dialog"]',
+        'div.rc-Modal',
+        'div.cds-dialog',
+        'div[class*="modal" i]',
+        'div[class*="dialog" i]'
+      ];
+
+      const dialogs = Array.from(document.querySelectorAll(dialogSelectors.join(", ")));
+      for (const dialog of dialogs) {
+        if (!isElementVisible(dialog)) continue;
+        const buttons = Array.from(dialog.querySelectorAll("button, a.cds-button"));
+        for (const btn of buttons) {
+          if (!isElementVisible(btn)) continue;
+          const text = (btn.innerText || btn.textContent || "").trim();
+          if (
+            /^(continue|start|start\s+attempt|resume|proceed|yes|ok)$/i.test(text) ||
+            btn.getAttribute("data-testid")?.includes("continue") ||
+            btn.getAttribute("data-testid")?.includes("start")
+          ) {
+            console.log(`[QUIZ AUTO] Found pre-quiz modal confirmation button "${text}", clicking...`);
+            btn.click();
+            await sleep(800);
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+
+    /**
+     * Waits for quiz questions (radio/checkbox/text inputs) to appear in the DOM.
+     */
+    async function waitForQuizQuestionsToRender(maxWaitMs = 15000) {
+      const startTime = Date.now();
+      while (Date.now() - startTime < maxWaitMs) {
+        // Also check if any pre-quiz modal appeared in the meantime
+        await handlePreQuizModals();
+
+        const inputCount = document.querySelectorAll('input[type="radio"], input[type="checkbox"]').length;
+        if (inputCount > 0) {
+          const domQ = extractQuestionsFromDOM();
+          if (domQ && domQ.length > 0) {
+            return domQ;
+          }
+        }
+        await sleep(500);
+      }
+      return extractQuestionsFromDOM();
+    }
+
+    /**
+     * Automatically initiates the quiz attempt if currently on an overview or landing page.
+     */
+    async function startQuizAttempt() {
+      const currentPath = window.location.pathname;
+      const isAttemptPage = currentPath.endsWith("/attempt") || currentPath.endsWith("attempt");
+      const hasInputs = document.querySelectorAll('input[type="radio"], input[type="checkbox"]').length > 0;
+
+      if (isAttemptPage && hasInputs) {
+        return true; // Already on an active attempt page with questions loaded
+      }
+
+      const startBtn = findQuizStartButton();
+      if (startBtn) {
+        const btnText = (startBtn.innerText || startBtn.textContent || "").trim();
+        console.log(`[QUIZ AUTO] Found start button "${btnText}", initiating quiz...`);
+        showToast(`Initiating quiz (${btnText})...`, "info");
+        notifyQuizProgress("starting", { message: `Initiating quiz (${btnText})...` });
+
+        startBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+        await sleep(300);
+        startBtn.click();
+        await sleep(1000);
+
+        // Handle any confirmation modal dialog ("Continue" / "Start Attempt")
+        await handlePreQuizModals();
+
+        // Wait for attempt page & questions to render
+        notifyQuizProgress("loading_questions", { message: "Waiting for assessment questions to render..." });
+        const questions = await waitForQuizQuestionsToRender(15000);
+        if (questions && questions.length > 0) {
+          return true;
+        }
+      }
+
+      return false;
+    }
+
+    /**
+     * Automatically detects and checks the Honor Code / Academic Integrity checkbox.
+     */
+    async function checkHonorCodeAgreement() {
+      console.log("[QUIZ AUTO] Looking for Honor Code / Academic Integrity agreement checkbox...");
+
+      // Strategy 1: Check known container selectors
+      const containers = Array.from(document.querySelectorAll(
+        '.rc-HonorCode, div[data-testid*="honor" i], div[data-testid*="agreement" i], div[class*="HonorCode" i], div[class*="Agreement" i], label[class*="honor" i]'
+      ));
+
+      for (const c of containers) {
+        const chk = c.querySelector('input[type="checkbox"]') || (c.tagName === "INPUT" && c.type === "checkbox" ? c : null);
+        if (chk) {
+          if (!chk.checked) {
+            chk.scrollIntoView({ behavior: "smooth", block: "center" });
+            await sleep(200);
+            selectChoiceOption(chk);
+            if (!chk.checked) {
+              chk.checked = true;
+              chk.dispatchEvent(new Event("change", { bubbles: true }));
+              chk.dispatchEvent(new Event("input", { bubbles: true }));
+            }
+          }
+          console.log("[QUIZ AUTO] Verified Honor Code checkbox via container selector.");
+          return true;
+        }
+      }
+
+      // Strategy 2: Scan all checkboxes on the page for Honor Code text
+      const allCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+      for (const chk of allCheckboxes) {
+        const label = chk.closest("label") || chk.parentElement;
+        const text = (label?.innerText || label?.textContent || "").toLowerCase();
+        if (
+          text.includes("submitting work that isn’t my own") ||
+          text.includes("submitting work that isn't my own") ||
+          text.includes("permanent failure") ||
+          text.includes("deactivation of my coursera account") ||
+          text.includes("honor code") ||
+          (text.includes("i understand") && text.includes("own work"))
+        ) {
+          if (!chk.checked) {
+            chk.scrollIntoView({ behavior: "smooth", block: "center" });
+            await sleep(200);
+            selectChoiceOption(chk);
+            if (!chk.checked) {
+              chk.checked = true;
+              chk.dispatchEvent(new Event("change", { bubbles: true }));
+              chk.dispatchEvent(new Event("input", { bubbles: true }));
+            }
+          }
+          console.log("[QUIZ AUTO] Verified Honor Code checkbox via label text.");
+          return true;
+        }
+      }
+
+      return false;
+    }
+
+    /**
+     * Handles post-submit confirmation modals (e.g. "Are you sure you want to submit?").
+     */
+    async function handlePostSubmitConfirmation() {
+      const maxWait = 4000;
+      const startTime = Date.now();
+      while (Date.now() - startTime < maxWait) {
+        const dialogs = Array.from(document.querySelectorAll('div[role="dialog"], div.rc-Modal, div.cds-dialog, div[class*="modal" i]'));
+        for (const dialog of dialogs) {
+          if (!isElementVisible(dialog)) continue;
+          const buttons = Array.from(dialog.querySelectorAll("button, a.cds-button"));
+          for (const btn of buttons) {
+            if (!isElementVisible(btn)) continue;
+            const text = (btn.innerText || btn.textContent || "").trim();
+            if (
+              /^(submit|confirm|yes|proceed|ok)$/i.test(text) ||
+              btn.getAttribute("data-testid")?.includes("submit")
+            ) {
+              console.log(`[QUIZ AUTO] Found post-submit confirmation button "${text}", clicking...`);
+              btn.click();
+              await sleep(600);
+              return true;
+            }
+          }
+        }
+        await sleep(350);
+      }
+      return false;
+    }
+
+    /**
+     * Automatically submits the quiz attempt after answers and Honor Code are set.
+     */
+    async function submitQuizAttempt() {
+      console.log("[QUIZ AUTO] Locating Submit button...");
+      const submitSelectors = [
+        'button[data-testid="submit-button"]',
+        'button[data-testid="exam-submit-button"]',
+        'button[data-testid="quiz-submit-button"]',
+        'button[data-testid*="submit" i]'
+      ];
+
+      let submitBtn = null;
+      for (const sel of submitSelectors) {
+        const btn = document.querySelector(sel);
+        if (btn && isElementVisible(btn)) {
+          submitBtn = btn;
+          break;
+        }
+      }
+
+      if (!submitBtn) {
+        const allButtons = Array.from(document.querySelectorAll("button"));
+        for (const btn of allButtons) {
+          if (!isElementVisible(btn)) continue;
+          const text = (btn.innerText || btn.textContent || "").trim();
+          if (/^(submit|submit\s+quiz|submit\s+assignment|submit\s+exam)$/i.test(text)) {
+            submitBtn = btn;
+            break;
+          }
+        }
+      }
+
+      if (!submitBtn) {
+        console.warn("[QUIZ AUTO] Could not locate Submit button.");
+        return false;
+      }
+
+      // Scroll to submit button
+      submitBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+      await sleep(400);
+
+      // If submit button is disabled, wait briefly for React validation state to settle
+      if (submitBtn.disabled) {
+        console.log("[QUIZ AUTO] Submit button is currently disabled, waiting up to 3s for state update...");
+        for (let i = 0; i < 6; i++) {
+          await sleep(500);
+          if (!submitBtn.disabled) break;
+        }
+      }
+
+      console.log("[QUIZ AUTO] Clicking Submit button...");
+      submitBtn.click();
+      await sleep(1000);
+
+      // Handle any post-submit confirmation modal
+      await handlePostSubmitConfirmation();
+      return true;
+    }
+
     async function solveQuiz() {
       if (isSolvingQuiz) return;
       isSolvingQuiz = true;
@@ -2592,6 +2901,12 @@ ${cleanPromptData}`;
           showToast(keyMsg, "error");
           notifyQuizProgress("error", { message: keyMsg });
           return;
+        }
+
+        // STEP 0: If on an exam/quiz overview page, automatically start the quiz and handle pre-quiz modals
+        const started = await startQuizAttempt();
+        if (started) {
+          await sleep(1000);
         }
 
         notifyQuizProgress("loading_questions", { message: "Reading question draft from Coursera..." });
@@ -2658,9 +2973,9 @@ ${cleanPromptData}`;
 
         showToast(`Analyzing questions using ${geminiModel || DEFAULT_QUIZ_MODEL}...`, "info");
 
-        const GEMINI_TIMEOUT_MS = 60000;
+        const GEMINI_TIMEOUT_MS = 100000;
         const geminiTimeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("Gemini API request timed out after 60 seconds. Please try again.")), GEMINI_TIMEOUT_MS)
+          setTimeout(() => reject(new Error("Gemini API request timed out after 100 seconds. Please try again.")), GEMINI_TIMEOUT_MS)
         );
 
         const answers = await Promise.race([
@@ -2695,17 +3010,35 @@ ${cleanPromptData}`;
           return;
         }
 
+        // STEP 4: Agree to Honor Code / Academic Integrity Checkbox
         notifyQuizProgress("submitting", {
           current: totalCount,
           total: totalCount,
-          message: "Finalizing answer selections..."
+          message: "Verifying Honor Code agreement..."
         });
+        await checkHonorCodeAgreement();
+        await sleep(500);
+
+        // STEP 5: Automatically submit the quiz and confirm modal
+        notifyQuizProgress("submitting", {
+          current: totalCount,
+          total: totalCount,
+          message: "Submitting quiz attempt..."
+        });
+        const submitted = await submitQuizAttempt();
+        if (submitted) {
+          showToast("Quiz answers filled, Honor Code checked, and quiz submitted!", "success");
+        } else {
+          showToast("Quiz answers filled and Honor Code checked. Please review and submit.", "info");
+        }
 
         // Actual completion confirmation
         notifyQuizProgress("completed", {
           current: totalCount,
           total: totalCount,
-          message: "✓ Quiz completed successfully"
+          message: submitted
+            ? "✓ Quiz solved and submitted successfully"
+            : "✓ Quiz answers applied successfully"
         });
       } catch (error) {
         console.error("Error in solveQuestions:", error);
