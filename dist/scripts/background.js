@@ -296,7 +296,28 @@
           const controller = new AbortController();
           // Set to 90 seconds to allow deep reasoning / thinking models to finish full multi-question batches
           const timeoutId = setTimeout(() => controller.abort(), 90000);
-          const fetchRes = await fetch(url, { ...(options || {}), signal: controller.signal });
+
+          const fetchHeaders = { ...(options?.headers || {}) };
+          let fetchBody = options?.body;
+
+          if (typeof fetchBody === "string") {
+            const encoded = new TextEncoder().encode(fetchBody);
+            fetchHeaders["Content-Type"] = fetchHeaders["Content-Type"] || "application/json";
+            fetchHeaders["Content-Length"] = String(encoded.length);
+            fetchBody = encoded;
+          } else if (fetchBody && fetchBody instanceof Uint8Array) {
+            fetchHeaders["Content-Length"] = String(fetchBody.length);
+          } else if (options?.method === "POST" && !fetchBody) {
+            fetchHeaders["Content-Length"] = "0";
+            fetchBody = new Uint8Array(0);
+          }
+
+          const fetchRes = await fetch(url, {
+            ...(options || {}),
+            headers: fetchHeaders,
+            body: fetchBody,
+            signal: controller.signal
+          });
           clearTimeout(timeoutId);
           const bodyText = await fetchRes.text();
           sendResponse({

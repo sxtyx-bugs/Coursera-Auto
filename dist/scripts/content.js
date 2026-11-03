@@ -1882,22 +1882,26 @@ ${cleanPromptData}`;
         console.log(`[QUIZ GEMINI DEBUG] endpoint = ${endpoint}`);
         console.log(`[QUIZ GEMINI DEBUG] apiKeyPresent = ${Boolean(this.apiKey)}`);
 
+        const requestBodyStr = JSON.stringify({
+          contents: [
+            {
+              parts: [{ text: prompt }]
+            }
+          ],
+          generationConfig: {
+            temperature: 0.1,
+            responseMimeType: "application/json"
+          }
+        });
+        const requestBodyBytes = new TextEncoder().encode(requestBodyStr).length;
+
         const requestOptions = {
           method: "POST",
           headers: {
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "Content-Length": String(requestBodyBytes)
           },
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [{ text: prompt }]
-              }
-            ],
-            generationConfig: {
-              temperature: 0.1,
-              responseMimeType: "application/json"
-            }
-          })
+          body: requestBodyStr
         };
 
         const maskApiKey = (str) => {
