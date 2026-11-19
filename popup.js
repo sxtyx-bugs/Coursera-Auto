@@ -6,35 +6,164 @@
 (() => {
   'use strict';
 
-  const PROVIDER_MODELS = {
+  const FALLBACK_PROVIDER_MODELS = {
     groq: [
       { id: "llama-3.3-70b-versatile", name: "llama-3.3-70b-versatile (Recommended)" },
       { id: "llama-3.1-8b-instant", name: "llama-3.1-8b-instant (Fastest)" },
-      { id: "mixtral-8x7b-32768", name: "mixtral-8x7b-32768 (MoE)" }
+      { id: "qwen-2.5-32b", name: "qwen-2.5-32b" },
+      { id: "mixtral-8x7b-32768", name: "mixtral-8x7b-32768" }
+    ],
+    nvidia: [
+      { id: "meta/llama-3.3-70b-instruct", name: "meta/llama-3.3-70b-instruct (Recommended)" },
+      { id: "meta/llama-3.1-8b-instruct", name: "meta/llama-3.1-8b-instruct" },
+      { id: "deepseek-ai/deepseek-r1", name: "deepseek-ai/deepseek-r1 (Reasoning)" },
+      { id: "nvidia/nemotron-4-340b-instruct", name: "nvidia/nemotron-4-340b-instruct" }
+    ],
+    deepseek: [
+      { id: "deepseek-chat", name: "deepseek-chat (V3 Recommended)" },
+      { id: "deepseek-reasoner", name: "deepseek-reasoner (R1 Reasoning)" }
+    ],
+    openrouter: [
+      { id: "meta-llama/llama-3.3-70b-instruct:free", name: "llama-3.3-70b-instruct:free" },
+      { id: "deepseek/deepseek-r1:free", name: "deepseek-r1:free" },
+      { id: "google/gemini-2.0-flash-exp:free", name: "gemini-2.0-flash-exp:free" },
+      { id: "mistralai/mistral-small-24b-instruct-2501:free", name: "mistral-small:free" }
+    ],
+    gemini: [
+      { id: "gemini-2.0-flash", name: "gemini-2.0-flash (Recommended)" },
+      { id: "gemini-1.5-flash", name: "gemini-1.5-flash" },
+      { id: "gemini-2.5-flash", name: "gemini-2.5-flash" },
+      { id: "gemini-1.5-pro", name: "gemini-1.5-pro" }
     ],
     cerebras: [
       { id: "llama3.3-70b", name: "llama3.3-70b (Recommended)" },
-      { id: "llama3.1-8b", name: "llama3.1-8b (High Throughput)" }
-    ],
-    openrouter: [
-      { id: "meta-llama/llama-3.3-70b-instruct:free", name: "llama-3.3-70b (Recommended Free)" },
-      { id: "google/gemini-2.0-flash-exp:free", name: "gemini-2.0-flash-exp:free" },
-      { id: "mistralai/mistral-small-24b-instruct-2501:free", name: "mistral-small:free" },
-      { id: "deepseek/deepseek-r1:free", name: "deepseek-r1:free" }
-    ],
-    gemini: [
-      { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash (Recommended)" },
-      { id: "gemini-2.0-flash", name: "Gemini 2.0 Flash" },
-      { id: "gemini-1.5-flash", name: "Gemini 1.5 Flash" }
+      { id: "llama3.1-8b", name: "llama3.1-8b" }
     ]
   };
 
   const PROVIDER_KEY_LINKS = {
     groq: "https://console.groq.com/keys",
-    cerebras: "https://cloud.cerebras.ai/",
+    nvidia: "https://build.nvidia.com/",
+    deepseek: "https://platform.deepseek.com/api_keys",
     openrouter: "https://openrouter.ai/keys",
-    gemini: "https://aistudio.google.com/app/apikey"
+    gemini: "https://aistudio.google.com/app/apikey",
+    cerebras: "https://cloud.cerebras.ai/"
   };
+
+  /**
+   * Helper to send action message to active Coursera tab
+   * Supports auto-injection if extension was reloaded in developer mode
+   */
+  function sendTabAction(action, callback) {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (!tabs || !tabs[0] || !tabs[0].id) {
+        if (callback) callback("No active tab found");
+        return;
+      }
+
+      const activeTab = tabs[0];
+      const tabId = activeTab.id;
+      const url = activeTab.url || "";
+
+      if (!url.includes("coursera.org")) {
+        if (callback) callback("Please open an active Coursera course page first.");
+        return;
+      }
+
+      // First attempt: direct message
+      chrome.tabs.sendMessage(tabId, { action: action }, (response) => {
+        const err = chrome.runtime.lastError;
+        if (err) {
+          console.warn("[CourseraAssistant] Connection pending, injecting content script:", err.message);
+          // If receiving end is missing (e.g. extension updated/reloaded), inject content script
+          if (chrome.scripting) {
+            chrome.scripting.executeScript({
+              target: { tabId: tabId },
+              files: ["dist/scripts/content.js"]
+            }, () => {
+              if (chrome.runtime.lastError) {
+                // Try plain string send fallback
+                chrome.tabs.sendMessage(tabId, action, (resp2) => {
+                  const err2 = chrome.runtime.lastError;
+                  if (callback) callback(err2 ? "Please reload the Coursera course page." : null, resp2);
+                });
+                return;
+              }
+              // Wait briefly for content script to mount message listeners
+              setTimeout(() => {
+                chrome.tabs.sendMessage(tabId, { action: action }, (retryResp) => {
+                  const retryErr = chrome.runtime.lastError;
+                  if (retryErr) {
+                    chrome.tabs.sendMessage(tabId, action, (finalResp) => {
+                      const finalErr = chrome.runtime.lastError;
+                      if (callback) callback(finalErr ? "Please reload the Coursera course page." : null, finalResp);
+                    });
+                  } else {
+                    if (callback) callback(null, retryResp);
+                  }
+                });
+              }, 300);
+            });
+            return;
+          }
+
+          if (callback) callback(err.message);
+          return;
+        }
+
+        if (callback) callback(null, response);
+      });
+    });
+  }
+
+  /**
+   * 1. Initialize Course Workflow Buttons
+   */
+  function initWorkflows() {
+    const statusEl = document.getElementById("key-status");
+
+    const workflowMap = [
+      { id: "bypass", action: "bypass", activeText: "Running All...", doneText: "Progression started. Check page banner." },
+      { id: "dialogueBtn", action: "dialogue", activeText: "Solving...", doneText: "Coach dialogues active. Check page banner." },
+      { id: "discussionBtn", action: "discussion", activeText: "Posting...", doneText: "Discussion answers active. Check page banner." },
+      { id: "readingBtn", action: "reading", activeText: "Marking...", doneText: "Reading completion active. Check page banner." },
+      { id: "videoBtn", action: "video", activeText: "Skipping...", doneText: "Video completion active. Check page banner." }
+    ];
+
+    workflowMap.forEach(({ id, action, activeText, doneText }) => {
+      const btn = document.getElementById(id);
+      if (!btn) return;
+
+      btn.addEventListener("click", () => {
+        const origHtml = btn.innerHTML;
+        btn.disabled = true;
+        btn.classList.add("is-active");
+        btn.innerHTML = `<span class="btn-feature-label">${activeText}</span>`;
+
+        if (statusEl) {
+          statusEl.textContent = `Executing ${action}...`;
+          statusEl.style.color = "#0f172a";
+        }
+
+        sendTabAction(action, (err) => {
+          if (err && statusEl) {
+            statusEl.textContent = err;
+            statusEl.style.color = "#ef4444";
+          }
+        });
+
+        setTimeout(() => {
+          btn.innerHTML = origHtml;
+          btn.disabled = false;
+          btn.classList.remove("is-active");
+          if (statusEl && (!statusEl.textContent || !statusEl.textContent.includes("Please open"))) {
+            statusEl.textContent = doneText;
+            statusEl.style.color = "#64748b";
+          }
+        }, 2200);
+      });
+    });
+  }
 
   /**
    * 2. Initialize Multi-Provider AI Settings & Quiz Solver
@@ -43,6 +172,8 @@
     const providerSelect = document.getElementById("provider-select");
     const keyInput = document.getElementById("key");
     const modelSelect = document.getElementById("model-select");
+    const refreshModelsBtn = document.getElementById("refreshModelsBtn");
+    const testConnectionBtn = document.getElementById("testConnectionBtn");
     const saveBtn = document.getElementById("save");
     const quizToggle = document.getElementById("quizToggel");
     const autoBadge = document.getElementById("autoBadge");
@@ -54,14 +185,21 @@
 
     let loadedConfig = {
       groq: { enabled: true, apiKey: "", model: "llama-3.3-70b-versatile" },
-      cerebras: { enabled: true, apiKey: "", model: "llama3.3-70b" },
+      nvidia: { enabled: true, apiKey: "", model: "meta/llama-3.3-70b-instruct" },
+      deepseek: { enabled: true, apiKey: "", model: "deepseek-chat" },
       openrouter: { enabled: true, apiKey: "", model: "meta-llama/llama-3.3-70b-instruct:free" },
-      gemini: { enabled: true, apiKey: "", model: "gemini-2.5-flash" }
+      gemini: { enabled: true, apiKey: "", model: "gemini-2.0-flash" },
+      cerebras: { enabled: true, apiKey: "", model: "llama3.3-70b" }
     };
     let currentProvider = "groq";
+    let modelFetchToken = 0;
 
     openSettingsDetailBtn?.addEventListener("click", () => {
-      chrome.runtime.openOptionsPage();
+      if (chrome.runtime.openOptionsPage) {
+        chrome.runtime.openOptionsPage();
+      } else {
+        window.open(chrome.runtime.getURL("dist/settings.html"));
+      }
     });
 
     const updateBadge = (on) => {
@@ -70,29 +208,99 @@
       autoBadge.classList.toggle("is-on", on);
     };
 
-    function populateModelsForProvider(pid, selectedModel) {
+    /**
+     * Populate model select with strict provider isolation
+     */
+    function renderModelOptions(pid, models, preferredModel) {
       if (!modelSelect) return;
       modelSelect.innerHTML = "";
-      const models = PROVIDER_MODELS[pid] || [];
-      models.forEach(m => {
+
+      const list = Array.isArray(models) && models.length > 0
+        ? models
+        : (FALLBACK_PROVIDER_MODELS[pid] || []);
+
+      let matched = false;
+      list.forEach(m => {
         const opt = document.createElement("option");
         opt.value = m.id;
-        opt.textContent = m.name;
-        if (selectedModel && (selectedModel === m.id || selectedModel.endsWith(m.id))) {
+        opt.textContent = m.name || m.id;
+        if (preferredModel && (preferredModel === m.id || preferredModel.endsWith(m.id))) {
           opt.selected = true;
+          matched = true;
         }
         modelSelect.appendChild(opt);
       });
-      // If custom model not in list, add it
-      if (selectedModel && !models.some(m => m.id === selectedModel)) {
+
+      // If custom model ID was saved and not in discovered list, preserve it as an option
+      if (preferredModel && !matched) {
         const customOpt = document.createElement("option");
-        customOpt.value = selectedModel;
-        customOpt.textContent = selectedModel;
+        customOpt.value = preferredModel;
+        customOpt.textContent = `${preferredModel} (Custom)`;
         customOpt.selected = true;
-        modelSelect.appendChild(customOpt);
+        modelSelect.insertBefore(customOpt, modelSelect.firstChild);
+      }
+
+      if (!preferredModel && modelSelect.options.length > 0) {
+        modelSelect.options[0].selected = true;
       }
     }
 
+    /**
+     * Fetch dynamic models from background worker with race-condition prevention
+     */
+    function fetchAndPopulateModels(pid, apiKey, preferredModel) {
+      const thisToken = ++modelFetchToken;
+
+      if (!apiKey || !apiKey.trim()) {
+        renderModelOptions(pid, FALLBACK_PROVIDER_MODELS[pid], preferredModel);
+        if (statusEl) {
+          statusEl.textContent = `Add your ${pid.toUpperCase()} API key to discover live models.`;
+          statusEl.style.color = "#64748b";
+        }
+        return;
+      }
+
+      // Show temporary loading indicator in dropdown
+      if (modelSelect) {
+        modelSelect.innerHTML = `<option value="">Discovering ${pid.toUpperCase()} models...</option>`;
+      }
+
+      chrome.runtime.sendMessage(
+        {
+          action: "FETCH_PROVIDER_MODELS",
+          payload: {
+            provider: pid,
+            apiKey: apiKey.trim(),
+            freeOnly: pid === "openrouter"
+          }
+        },
+        (response) => {
+          if (thisToken !== modelFetchToken) {
+            // User already switched to a different provider; discard stale response
+            return;
+          }
+
+          if (response && response.ok && Array.isArray(response.models) && response.models.length > 0) {
+            renderModelOptions(pid, response.models, preferredModel);
+            if (statusEl) {
+              statusEl.textContent = `✓ Discovered ${response.models.length} ${pid.toUpperCase()} models.`;
+              statusEl.style.color = "#10b981";
+            }
+          } else {
+            console.warn(`[Popup] Model discovery failed for ${pid}, using fallback:`, response?.error);
+            renderModelOptions(pid, FALLBACK_PROVIDER_MODELS[pid], preferredModel);
+            if (statusEl && response?.error) {
+              statusEl.textContent = `Using verified catalogue (${response.error.slice(0, 45)}...)`;
+              statusEl.style.color = "#f59e0b";
+            }
+          }
+        }
+      );
+    }
+
+    /**
+     * Switch the active provider view and load its isolated configuration
+     */
     function switchProviderView(pid) {
       currentProvider = pid;
       if (apiKeyLink && PROVIDER_KEY_LINKS[pid]) {
@@ -103,16 +311,90 @@
         keyInput.value = pCfg.apiKey || "";
         keyInput.placeholder = `Paste ${pid.toUpperCase()} API key`;
       }
-      populateModelsForProvider(pid, pCfg.model);
+
+      fetchAndPopulateModels(pid, pCfg.apiKey, pCfg.model);
     }
 
     providerSelect?.addEventListener("change", () => {
+      // Save any pending input for previous provider
+      if (loadedConfig[currentProvider]) {
+        if (keyInput) loadedConfig[currentProvider].apiKey = keyInput.value.trim();
+        if (modelSelect && modelSelect.value) loadedConfig[currentProvider].model = modelSelect.value;
+      }
       switchProviderView(providerSelect.value);
+    });
+
+    // Refresh Models Button (↻)
+    refreshModelsBtn?.addEventListener("click", () => {
+      const keyVal = keyInput?.value?.trim() || loadedConfig[currentProvider]?.apiKey || "";
+      if (!keyVal) {
+        if (statusEl) {
+          statusEl.textContent = `Enter a ${currentProvider.toUpperCase()} API key first to discover models.`;
+          statusEl.style.color = "#ef4444";
+        }
+        keyInput?.focus();
+        return;
+      }
+      const currentSelectedModel = modelSelect?.value;
+      fetchAndPopulateModels(currentProvider, keyVal, currentSelectedModel);
+    });
+
+    // Test Connection Button
+    testConnectionBtn?.addEventListener("click", () => {
+      const keyVal = keyInput?.value?.trim() || "";
+      if (!keyVal) {
+        if (statusEl) {
+          statusEl.textContent = `Please enter a ${currentProvider.toUpperCase()} API key to test.`;
+          statusEl.style.color = "#ef4444";
+        }
+        keyInput?.focus();
+        return;
+      }
+
+      testConnectionBtn.disabled = true;
+      testConnectionBtn.textContent = "Testing...";
+      if (statusEl) {
+        statusEl.textContent = `Verifying ${currentProvider.toUpperCase()} connection...`;
+        statusEl.style.color = "#0f172a";
+      }
+
+      chrome.runtime.sendMessage(
+        {
+          action: "TEST_AI_PROVIDER",
+          payload: {
+            provider: currentProvider,
+            apiKey: keyVal,
+            model: modelSelect?.value || "",
+            freeOnly: currentProvider === "openrouter"
+          }
+        },
+        (resp) => {
+          testConnectionBtn.disabled = false;
+          testConnectionBtn.textContent = "Test";
+
+          if (resp && resp.ok) {
+            const count = resp.modelsCount || 0;
+            if (statusEl) {
+              statusEl.textContent = `✓ Connected! ${count} accessible model${count === 1 ? '' : 's'} verified.`;
+              statusEl.style.color = "#10b981";
+            }
+            if (Array.isArray(resp.models) && resp.models.length > 0) {
+              renderModelOptions(currentProvider, resp.models, modelSelect?.value);
+            }
+          } else {
+            const err = resp?.error || "Connection test failed";
+            if (statusEl) {
+              statusEl.textContent = `✗ ${err.slice(0, 60)}`;
+              statusEl.style.color = "#ef4444";
+            }
+          }
+        }
+      );
     });
 
     // Load initial storage settings
     chrome.storage.local.get(
-      ["quiz", "activeProvider", "providersConfig", "key", "model"],
+      ["quiz", "activeProvider", "providersConfig", "key", "model", "groqApiKey", "nvidiaApiKey", "deepseekApiKey", "openrouterApiKey"],
       (data) => {
         if (!data) return;
         if (quizToggle && data.quiz !== undefined) {
@@ -123,19 +405,18 @@
         if (data.providersConfig) {
           loadedConfig = { ...loadedConfig, ...data.providersConfig };
         }
-        // Legacy Gemini key mapping
-        if (data.key && !loadedConfig.gemini.apiKey) {
-          loadedConfig.gemini.apiKey = data.key;
-        }
-        if (data.model && !loadedConfig.gemini.model) {
-          loadedConfig.gemini.model = data.model;
-        }
+        // Legacy key mappings fallback
+        if (data.key && !loadedConfig.gemini.apiKey) loadedConfig.gemini.apiKey = data.key;
+        if (data.model && !loadedConfig.gemini.model) loadedConfig.gemini.model = data.model;
+        if (data.groqApiKey && !loadedConfig.groq.apiKey) loadedConfig.groq.apiKey = data.groqApiKey;
+        if (data.nvidiaApiKey && !loadedConfig.nvidia.apiKey) loadedConfig.nvidia.apiKey = data.nvidiaApiKey;
+        if (data.deepseekApiKey && !loadedConfig.deepseek.apiKey) loadedConfig.deepseek.apiKey = data.deepseekApiKey;
+        if (data.openrouterApiKey && !loadedConfig.openrouter.apiKey) loadedConfig.openrouter.apiKey = data.openrouterApiKey;
 
         const activeP = data.activeProvider || "groq";
         if (providerSelect) providerSelect.value = activeP;
         switchProviderView(activeP);
 
-        // Check if at least one provider has key
         const anyKey = Object.values(loadedConfig).some(c => c.apiKey && c.apiKey.trim());
         if (statusEl) {
           statusEl.textContent = anyKey
@@ -157,8 +438,8 @@
     // Auto-Solve Quiz Toggle
     quizToggle?.addEventListener("change", (e) => {
       const isChecked = e.target.checked;
-      const anyKey = Object.values(loadedConfig).some(c => c.apiKey && c.apiKey.trim());
-      if (isChecked && !anyKey && (!keyInput?.value || !keyInput.value.trim())) {
+      const anyKey = Object.values(loadedConfig).some(c => c.apiKey && c.apiKey.trim()) || (keyInput?.value && keyInput.value.trim());
+      if (isChecked && !anyKey) {
         e.target.checked = false;
         updateBadge(false);
         if (statusEl) {
@@ -181,7 +462,7 @@
     // Save Settings Button
     saveBtn?.addEventListener("click", () => {
       const keyVal = keyInput?.value?.trim() || "";
-      const modelVal = modelSelect?.value || PROVIDER_MODELS[currentProvider]?.[0]?.id;
+      const modelVal = modelSelect?.value || FALLBACK_PROVIDER_MODELS[currentProvider]?.[0]?.id;
 
       if (!keyVal) {
         if (statusEl) {
@@ -203,7 +484,8 @@
         model: modelVal
       };
 
-      const remaining = ["groq", "cerebras", "openrouter", "gemini"].filter(id => id !== currentProvider);
+      const allProviderIds = ["groq", "nvidia", "deepseek", "openrouter", "gemini", "cerebras"];
+      const remaining = allProviderIds.filter(id => id !== currentProvider);
       const priorityList = [currentProvider, ...remaining];
 
       const savePayload = {
@@ -212,23 +494,27 @@
         providersConfig: loadedConfig
       };
 
-      // Legacy compatibility
-      if (currentProvider === "gemini" || loadedConfig.gemini.apiKey) {
+      // Legacy compatibility keys
+      if (loadedConfig.gemini.apiKey) {
         savePayload.key = loadedConfig.gemini.apiKey;
         savePayload.model = loadedConfig.gemini.model;
         savePayload.geminiApiKey = loadedConfig.gemini.apiKey;
       }
+      if (loadedConfig.groq.apiKey) savePayload.groqApiKey = loadedConfig.groq.apiKey;
+      if (loadedConfig.nvidia?.apiKey) savePayload.nvidiaApiKey = loadedConfig.nvidia.apiKey;
+      if (loadedConfig.deepseek?.apiKey) savePayload.deepseekApiKey = loadedConfig.deepseek.apiKey;
+      if (loadedConfig.openrouter?.apiKey) savePayload.openrouterApiKey = loadedConfig.openrouter.apiKey;
 
       chrome.storage.local.set(savePayload, () => {
         chrome.storage.sync?.set(savePayload);
         if (statusEl) {
-          statusEl.textContent = `✓ ${currentProvider.toUpperCase()} saved. Failover enabled.`;
+          statusEl.textContent = `✓ ${currentProvider.toUpperCase()} saved (${modelVal}). Failover enabled.`;
           statusEl.style.color = "#10b981";
         }
         saveBtn.textContent = "Saved ✓";
         setTimeout(() => {
           saveBtn.disabled = false;
-          saveBtn.textContent = "Save Settings";
+          saveBtn.textContent = "Save";
         }, 1500);
       });
     });

@@ -225,7 +225,9 @@
       "https://generativelanguage.googleapis.com/",
       "https://api.groq.com/",
       "https://api.cerebras.ai/",
-      "https://openrouter.ai/"
+      "https://openrouter.ai/",
+      "https://integrate.api.nvidia.com/",
+      "https://api.deepseek.com/"
     ];
 
     function isAllowedAiUrl(url) {
@@ -243,24 +245,10 @@
 
       try {
         const fetchHeaders = { ...(options?.headers || {}) };
-        let fetchBody = options?.body;
-
-        if (typeof fetchBody === "string") {
-          const encoded = new TextEncoder().encode(fetchBody);
-          fetchHeaders["Content-Type"] = fetchHeaders["Content-Type"] || "application/json";
-          fetchHeaders["Content-Length"] = String(encoded.length);
-          fetchBody = encoded;
-        } else if (fetchBody && fetchBody instanceof Uint8Array) {
-          fetchHeaders["Content-Length"] = String(fetchBody.length);
-        } else if (options?.method === "POST" && !fetchBody) {
-          fetchHeaders["Content-Length"] = "0";
-          fetchBody = new Uint8Array(0);
-        }
-
         const fetchRes = await fetch(url, {
           ...(options || {}),
           headers: fetchHeaders,
-          body: fetchBody,
+          body: options?.body,
           signal: controller.signal
         });
         clearTimeout(timeoutId);
@@ -280,6 +268,285 @@
           isTimeout: isAbort
         };
       }
+    }
+
+    // -------------------------------------------------------------
+    // Provider Model Discovery Adapters
+    // -------------------------------------------------------------
+    async function getGroqModels(apiKey) {
+      const url = "https://api.groq.com/openai/v1/models";
+      const res = await executeAiProxyFetch(url, {
+        method: "GET",
+        headers: {
+          "Authorization": `Bearer ${apiKey.trim()}`,
+          "Content-Type": "application/json"
+        }
+      }, 15000);
+
+      if (!res.ok) {
+        let msg = res.error || `HTTP ${res.status}`;
+        try {
+          const parsed = JSON.parse(res.text || "{}");
+          msg = parsed.error?.message || parsed.message || msg;
+        } catch (_) {}
+        const err = new Error(`Groq: ${msg}`);
+        err.status = res.status;
+        throw err;
+      }
+
+      const data = JSON.parse(res.text || "{}");
+      const list = Array.isArray(data.data) ? data.data : [];
+
+      // Filter text models, exclude audio/whisper/guard/embeddings
+      const filtered = list.filter(m => {
+        if (!m || !m.id) return false;
+        if (m.active === false) return false;
+        const id = m.id.toLowerCase();
+        if (id.includes("whisper") || id.includes("guard") || id.includes("embed") || id.includes("tts")) return false;
+        return true;
+      });
+
+      const normalized = filtered.map(m => ({
+        id: m.id,
+        name: m.id,
+        provider: "groq",
+        contextLength: m.context_window || null,
+        isFree: true,
+        supportsText: true,
+        supportsVision: m.id.toLowerCase().includes("vision")
+      }));
+
+      // Sort: prioritize versatile/70b models first
+      normalized.sort((a, b) => {
+        const aScore = a.id.includes("70b-versatile") ? 100 : a.id.includes("70b") ? 80 : a.id.includes("8b") ? 60 : 10;
+        const bScore = b.id.includes("70b-versatile") ? 100 : b.id.includes("70b") ? 80 : b.id.includes("8b") ? 60 : 10;
+        return bScore - aScore;
+      });
+
+      return normalized;
+    }
+
+    async function getNvidiaModels(apiKey) {
+      const url = "https://integrate.api.nvidia.com/v1/models";
+      const res = await executeAiProxyFetch(url, {
+        method: "GET",
+        headers: {
+          "Authorization": `Bearer ${apiKey.trim()}`,
+          "Content-Type": "application/json"
+        }
+      }, 15000);
+
+      if (!res.ok) {
+        let msg = res.error || `HTTP ${res.status}`;
+        try {
+          const parsed = JSON.parse(res.text || "{}");
+          msg = parsed.error?.message || parsed.message || msg;
+        } catch (_) {}
+        const err = new Error(`NVIDIA: ${msg}`);
+        err.status = res.status;
+        throw err;
+      }
+
+      const data = JSON.parse(res.text || "{}");
+      const list = Array.isArray(data.data) ? data.data : [];
+
+      const filtered = list.filter(m => {
+        if (!m || !m.id) return false;
+        const id = m.id.toLowerCase();
+        if (id.includes("embed") || id.includes("rerank") || id.includes("clip") || id.includes("audio")) return false;
+        return true;
+      });
+
+      let models = filtered.map(m => ({
+        id: m.id,
+        name: m.id,
+        provider: "nvidia",
+        contextLength: m.context_window || null,
+        isFree: null,
+        supportsText: true,
+        supportsVision: m.id.toLowerCase().includes("vision") || m.id.toLowerCase().includes("multimodal")
+      }));
+
+      // If catalogue is empty or filtered out, provide verified NVIDIA NIM text models
+      if (models.length === 0) {
+        const fallbackCatalogue = [
+          "meta/llama-3.3-70b-instruct",
+          "deepseek-ai/deepseek-r1",
+          "nvidia/nemotron-4-340b-instruct",
+          "meta/llama-3.1-8b-instruct",
+          "meta/llama-3.1-70b-instruct",
+          "mistralai/mistral-large-2-instruct",
+          "qwen/qwen2.5-72b-instruct"
+        ];
+        models = fallbackCatalogue.map(id => ({
+          id: id,
+          name: id,
+          provider: "nvidia",
+          contextLength: 131072,
+          isFree: null,
+          supportsText: true,
+          supportsVision: false
+        }));
+      }
+
+      return models;
+    }
+
+    async function getDeepSeekModels(apiKey) {
+      const url = "https://api.deepseek.com/models";
+      const res = await executeAiProxyFetch(url, {
+        method: "GET",
+        headers: {
+          "Authorization": `Bearer ${apiKey.trim()}`,
+          "Content-Type": "application/json"
+        }
+      }, 15000);
+
+      if (!res.ok) {
+        let msg = res.error || `HTTP ${res.status}`;
+        try {
+          const parsed = JSON.parse(res.text || "{}");
+          msg = parsed.error?.message || parsed.message || msg;
+        } catch (_) {}
+        const err = new Error(`DeepSeek: ${msg}`);
+        err.status = res.status;
+        throw err;
+      }
+
+      const data = JSON.parse(res.text || "{}");
+      const list = Array.isArray(data.data) && data.data.length > 0 ? data.data : [
+        { id: "deepseek-chat" },
+        { id: "deepseek-reasoner" }
+      ];
+
+      return list.map(m => ({
+        id: m.id,
+        name: m.id === "deepseek-chat" ? "deepseek-chat (DeepSeek-V3)" : m.id === "deepseek-reasoner" ? "deepseek-reasoner (DeepSeek-R1)" : m.id,
+        provider: "deepseek",
+        contextLength: 65536,
+        isFree: null,
+        supportsText: true,
+        supportsVision: false
+      }));
+    }
+
+    async function getOpenRouterModels(apiKey, freeOnly = false) {
+      const url = "https://openrouter.ai/api/v1/models";
+      const headers = {
+        "HTTP-Referer": "https://github.com/sxtyx-bugs/Coursera-Auto",
+        "X-Title": "Coursera Assistant"
+      };
+      if (apiKey && apiKey.trim()) {
+        headers["Authorization"] = `Bearer ${apiKey.trim()}`;
+      }
+
+      const res = await executeAiProxyFetch(url, {
+        method: "GET",
+        headers: headers
+      }, 15000);
+
+      if (!res.ok) {
+        let msg = res.error || `HTTP ${res.status}`;
+        try {
+          const parsed = JSON.parse(res.text || "{}");
+          msg = parsed.error?.message || parsed.message || msg;
+        } catch (_) {}
+        const err = new Error(`OpenRouter: ${msg}`);
+        err.status = res.status;
+        throw err;
+      }
+
+      const data = JSON.parse(res.text || "{}");
+      const list = Array.isArray(data.data) ? data.data : [];
+
+      const normalized = list
+        .filter(m => {
+          if (!m || !m.id) return false;
+          // Exclude pure image generation or audio models
+          const mod = m.architecture?.modality || "";
+          if (mod.includes("image->image") || mod.includes("audio->")) return false;
+          return true;
+        })
+        .map(m => {
+          const promptPrice = parseFloat(m.pricing?.prompt || "0");
+          const compPrice = parseFloat(m.pricing?.completion || "0");
+          const isFree = (promptPrice === 0 && compPrice === 0) || m.id.endsWith(":free");
+
+          return {
+            id: m.id,
+            name: m.name || m.id,
+            provider: "openrouter",
+            contextLength: m.context_length || null,
+            isFree: isFree,
+            supportsText: true,
+            supportsVision: Boolean(m.architecture?.modality?.includes("image->"))
+          };
+        });
+
+      if (freeOnly) {
+        return normalized.filter(m => m.isFree);
+      }
+
+      // Sort: free models first, then popular models
+      normalized.sort((a, b) => {
+        if (a.isFree && !b.isFree) return -1;
+        if (!a.isFree && b.isFree) return 1;
+        return a.name.localeCompare(b.name);
+      });
+
+      return normalized;
+    }
+
+    async function getGeminiModels(apiKey) {
+      const trimmedKey = (apiKey || "").trim();
+      const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(trimmedKey)}`;
+      const res = await executeAiProxyFetch(url, { method: "GET" }, 15000);
+
+      if (!res.ok) {
+        let msg = res.error || `HTTP ${res.status}`;
+        try {
+          const parsed = JSON.parse(res.text || "{}");
+          msg = parsed.error?.message || parsed.message || msg;
+        } catch (_) {}
+        const err = new Error(`Gemini: ${msg}`);
+        err.status = res.status;
+        throw err;
+      }
+
+      const data = JSON.parse(res.text || "{}");
+      const list = Array.isArray(data.models) ? data.models : [];
+
+      // Filter only models that support generateContent
+      const filtered = list.filter(m => {
+        if (!m || !m.name) return false;
+        const methods = m.supportedGenerationMethods || [];
+        if (!methods.includes("generateContent")) return false;
+        const name = m.name.toLowerCase();
+        if (name.includes("embedding") || name.includes("imagen") || name.includes("aqa")) return false;
+        return true;
+      });
+
+      const normalized = filtered.map(m => {
+        const cleanId = m.name.replace(/^models\//, "");
+        return {
+          id: cleanId,
+          name: m.displayName ? `${m.displayName} (${cleanId})` : cleanId,
+          provider: "gemini",
+          contextLength: m.inputTokenLimit || null,
+          isFree: true,
+          supportsText: true,
+          supportsVision: cleanId.includes("flash") || cleanId.includes("pro")
+        };
+      });
+
+      // Sort: prioritize 2.5-flash, 2.5-pro, 2.0-flash, 1.5-flash
+      normalized.sort((a, b) => {
+        const aScore = a.id.includes("2.5-flash") ? 100 : a.id.includes("2.5-pro") ? 90 : a.id.includes("2.0-flash") ? 80 : a.id.includes("1.5-flash") ? 70 : 10;
+        const bScore = b.id.includes("2.5-flash") ? 100 : b.id.includes("2.5-pro") ? 90 : b.id.includes("2.0-flash") ? 80 : b.id.includes("1.5-flash") ? 70 : 10;
+        return bScore - aScore;
+      });
+
+      return normalized;
     }
 
     // Unified AI API Request Proxy (handles fetch in extension context to avoid page CSP issues)
@@ -302,10 +569,61 @@
       return true;
     }
 
-    // Test AI Provider Connection
+    // Dynamic Provider Model Discovery
+    if (request.action === "FETCH_PROVIDER_MODELS") {
+      (async () => {
+        const { provider, apiKey, freeOnly } = request.payload || {};
+        if (!provider || typeof provider !== "string") {
+          sendResponse({ ok: false, error: "Provider name is required" });
+          return;
+        }
+
+        const trimmedKey = (apiKey || "").trim();
+        // OpenRouter can return public models without a key; other providers require key for discovery
+        if (provider !== "openrouter" && !trimmedKey) {
+          sendResponse({ ok: false, error: `Add your ${provider.toUpperCase()} API key to load available models.` });
+          return;
+        }
+
+        try {
+          let models = [];
+          if (provider === "groq") {
+            models = await getGroqModels(trimmedKey);
+          } else if (provider === "nvidia") {
+            models = await getNvidiaModels(trimmedKey);
+          } else if (provider === "deepseek") {
+            models = await getDeepSeekModels(trimmedKey);
+          } else if (provider === "openrouter") {
+            models = await getOpenRouterModels(trimmedKey, Boolean(freeOnly));
+          } else if (provider === "gemini") {
+            models = await getGeminiModels(trimmedKey);
+          } else {
+            sendResponse({ ok: false, error: `Unsupported provider: ${provider}` });
+            return;
+          }
+
+          sendResponse({
+            ok: true,
+            provider: provider,
+            models: models,
+            count: models.length
+          });
+        } catch (err) {
+          sendResponse({
+            ok: false,
+            provider: provider,
+            status: err.status || 0,
+            error: err.message || `Failed to fetch models for ${provider}`
+          });
+        }
+      })();
+      return true;
+    }
+
+    // Test AI Provider Connection (validates authentication by fetching models)
     if (request.action === "TEST_AI_PROVIDER") {
       (async () => {
-        const { provider, apiKey, model } = request.payload || {};
+        const { provider, apiKey, freeOnly } = request.payload || {};
         if (!apiKey || typeof apiKey !== "string" || !apiKey.trim()) {
           sendResponse({ ok: false, error: "API key is required" });
           return;
@@ -313,84 +631,57 @@
 
         const trimmedKey = apiKey.trim();
         try {
-          let testUrl = "";
-          let testOptions = {};
-
+          let models = [];
           if (provider === "groq") {
-            testUrl = "https://api.groq.com/openai/v1/chat/completions";
-            testOptions = {
-              method: "POST",
-              headers: {
-                "Authorization": `Bearer ${trimmedKey}`,
-                "Content-Type": "application/json"
-              },
-              body: JSON.stringify({
-                model: model || "llama-3.3-70b-versatile",
-                messages: [{ role: "user", content: "ping" }],
-                max_tokens: 1
-              })
-            };
-          } else if (provider === "cerebras") {
-            testUrl = "https://api.cerebras.ai/v1/chat/completions";
-            testOptions = {
-              method: "POST",
-              headers: {
-                "Authorization": `Bearer ${trimmedKey}`,
-                "Content-Type": "application/json"
-              },
-              body: JSON.stringify({
-                model: model || "llama3.3-70b",
-                messages: [{ role: "user", content: "ping" }],
-                max_tokens: 1
-              })
-            };
+            models = await getGroqModels(trimmedKey);
+          } else if (provider === "nvidia") {
+            models = await getNvidiaModels(trimmedKey);
+          } else if (provider === "deepseek") {
+            models = await getDeepSeekModels(trimmedKey);
           } else if (provider === "openrouter") {
-            testUrl = "https://openrouter.ai/api/v1/chat/completions";
-            testOptions = {
+            models = await getOpenRouterModels(trimmedKey, Boolean(freeOnly));
+          } else if (provider === "gemini") {
+            models = await getGeminiModels(trimmedKey);
+          } else if (provider === "cerebras") {
+            // Cerebras ping chat test for backward compatibility
+            const testRes = await executeAiProxyFetch("https://api.cerebras.ai/v1/chat/completions", {
               method: "POST",
               headers: {
                 "Authorization": `Bearer ${trimmedKey}`,
-                "HTTP-Referer": "https://github.com/sxtyx-bugs/Coursera-Auto",
-                "X-Title": "Coursera Assistant",
                 "Content-Type": "application/json"
               },
               body: JSON.stringify({
-                model: model || "meta-llama/llama-3.3-70b-instruct:free",
+                model: "llama3.3-70b",
                 messages: [{ role: "user", content: "ping" }],
                 max_tokens: 1
               })
-            };
-          } else if (provider === "gemini") {
-            const cleanModel = (model || "gemini-2.5-flash").replace(/^\/?(models\/)+/, "");
-            testUrl = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}?key=${encodeURIComponent(trimmedKey)}`;
-            testOptions = { method: "GET" };
+            }, 15000);
+            if (!testRes.ok) {
+              throw new Error(testRes.error || `HTTP ${testRes.status}`);
+            }
+            models = [{ id: "llama3.3-70b", name: "llama3.3-70b", provider: "cerebras" }];
           } else {
             sendResponse({ ok: false, error: `Unknown provider: ${provider}` });
             return;
           }
 
-          const res = await executeAiProxyFetch(testUrl, testOptions, 15000);
-          if (res.ok) {
-            sendResponse({ ok: true, message: "Connection successful" });
-          } else {
-            let detail = "";
-            try {
-              const parsed = JSON.parse(res.text || "{}");
-              detail = parsed.error?.message || parsed.message || res.statusText || "";
-            } catch (_) {
-              detail = res.text || res.statusText || "";
-            }
-            if (trimmedKey && detail.includes(trimmedKey)) {
-              detail = detail.split(trimmedKey).join("[REDACTED]");
-            }
-            sendResponse({
-              ok: false,
-              status: res.status,
-              error: detail || `HTTP ${res.status}: ${res.error || "Connection failed"}`
-            });
-          }
+          sendResponse({
+            ok: true,
+            provider: provider,
+            modelsCount: models.length,
+            models: models,
+            message: `Connection verified: ${models.length} accessible model${models.length === 1 ? '' : 's'} found.`
+          });
         } catch (err) {
-          sendResponse({ ok: false, error: err.message || "Failed to test provider connection" });
+          let cleanErr = err.message || "Failed to verify connection";
+          if (trimmedKey && cleanErr.includes(trimmedKey)) {
+            cleanErr = cleanErr.split(trimmedKey).join("[REDACTED]");
+          }
+          sendResponse({
+            ok: false,
+            status: err.status || 0,
+            error: cleanErr
+          });
         }
       })();
       return true;

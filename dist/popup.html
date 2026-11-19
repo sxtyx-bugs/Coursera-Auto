@@ -111,9 +111,11 @@
               <span class="well-label">ENG</span>
               <select id="provider-select">
                 <option value="groq" selected>Groq (Primary • Ultra-Fast)</option>
-                <option value="cerebras">Cerebras (Fallback 1 • Fast)</option>
-                <option value="openrouter">OpenRouter (Fallback 2 • Free)</option>
-                <option value="gemini">Google Gemini (Fallback 3)</option>
+                <option value="nvidia">NVIDIA NIM (Accelerated Inference)</option>
+                <option value="deepseek">DeepSeek (V3 &amp; R1 Reasoning)</option>
+                <option value="openrouter">OpenRouter (Free &amp; Open Models)</option>
+                <option value="gemini">Google Gemini (Deep Reasoning)</option>
+                <option value="cerebras">Cerebras (Fast Inference)</option>
               </select>
             </div>
 
@@ -123,6 +125,9 @@
               <select id="model-select">
                 <option value="llama-3.3-70b-versatile" selected>llama-3.3-70b-versatile</option>
               </select>
+              <button type="button" class="toggle-key-btn" id="refreshModelsBtn" title="Refresh available models from provider" style="padding: 0 6px; font-size: 13px;">
+                ↻
+              </button>
             </div>
 
             <!-- Key Well -->
@@ -138,8 +143,9 @@
             </div>
 
             <div style="display: flex; gap: 8px;">
-              <button id="save" class="btn-tactile-secondary" style="flex: 1;">Save Settings</button>
-              <button id="openSettingsDetailBtn" class="btn-tactile-secondary" style="flex: 1;" title="Advanced multi-provider settings">All Settings ⚙</button>
+              <button id="save" class="btn-tactile-secondary" style="flex: 1;">Save</button>
+              <button id="testConnectionBtn" class="btn-tactile-secondary" style="flex: 1;" title="Test API key &amp; verify connection">Test</button>
+              <button id="openSettingsDetailBtn" class="btn-tactile-secondary" style="flex: 1;" title="Advanced multi-provider settings">Settings ⚙</button>
             </div>
             <p id="key-status" class="status-hint">Auto-failover enabled across all configured providers.</p>
           </div>

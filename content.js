@@ -1932,27 +1932,157 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       }
     }
 
+    class NvidiaProvider {
+      constructor(config = {}) {
+        this.id = "nvidia";
+        this.displayName = "NVIDIA NIM";
+        this.apiKey = config.apiKey || "";
+        this.model = config.model || "meta/llama-3.3-70b-instruct";
+        this.enabled = config.enabled !== undefined ? config.enabled : true;
+        this.baseUrl = "https://integrate.api.nvidia.com/v1/chat/completions";
+      }
+
+      isEnabled() { return this.enabled && Boolean(this.apiKey); }
+      getApiKey() { return this.apiKey; }
+      getModel() { return this.model || "meta/llama-3.3-70b-instruct"; }
+
+      maskApiKey(str) {
+        if (!str || !this.apiKey) return str || "";
+        return str.split(this.apiKey).join("[REDACTED_NVIDIA_KEY]");
+      }
+
+      async solve(questions, timeoutMs = 25000) {
+        const payload = {
+          model: this.getModel(),
+          messages: [
+            { role: "system", content: SYSTEM_PROMPT },
+            { role: "user", content: `Assessment Questions:\n${JSON.stringify(questions, null, 2)}` }
+          ],
+          temperature: 0.1
+        };
+
+        const res = await performAiProxyRequest(
+          this.baseUrl,
+          {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${this.apiKey}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify(payload)
+          },
+          timeoutMs
+        );
+
+        if (!res.ok) {
+          const errText = await res.text();
+          let msg = "";
+          try {
+            const parsed = JSON.parse(errText);
+            msg = parsed.error?.message || errText;
+          } catch (_) {
+            msg = errText;
+          }
+          const err = new Error(`NVIDIA HTTP ${res.status}: ${this.maskApiKey(msg)}`);
+          err.status = res.status;
+          err.isAuthError = res.status === 401 || res.status === 403;
+          throw err;
+        }
+
+        const data = await res.json();
+        const rawContent = data.choices?.[0]?.message?.content;
+        return parseAIResponse(rawContent);
+      }
+    }
+
+    class DeepSeekProvider {
+      constructor(config = {}) {
+        this.id = "deepseek";
+        this.displayName = "DeepSeek";
+        this.apiKey = config.apiKey || "";
+        this.model = config.model || "deepseek-chat";
+        this.enabled = config.enabled !== undefined ? config.enabled : true;
+        this.baseUrl = "https://api.deepseek.com/chat/completions";
+      }
+
+      isEnabled() { return this.enabled && Boolean(this.apiKey); }
+      getApiKey() { return this.apiKey; }
+      getModel() { return this.model || "deepseek-chat"; }
+
+      maskApiKey(str) {
+        if (!str || !this.apiKey) return str || "";
+        return str.split(this.apiKey).join("[REDACTED_DEEPSEEK_KEY]");
+      }
+
+      async solve(questions, timeoutMs = 25000) {
+        const payload = {
+          model: this.getModel(),
+          messages: [
+            { role: "system", content: SYSTEM_PROMPT },
+            { role: "user", content: `Assessment Questions:\n${JSON.stringify(questions, null, 2)}` }
+          ],
+          temperature: 0.1,
+          response_format: { type: "json_object" }
+        };
+
+        const res = await performAiProxyRequest(
+          this.baseUrl,
+          {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${this.apiKey}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify(payload)
+          },
+          timeoutMs
+        );
+
+        if (!res.ok) {
+          const errText = await res.text();
+          let msg = "";
+          try {
+            const parsed = JSON.parse(errText);
+            msg = parsed.error?.message || errText;
+          } catch (_) {
+            msg = errText;
+          }
+          const err = new Error(`DeepSeek HTTP ${res.status}: ${this.maskApiKey(msg)}`);
+          err.status = res.status;
+          err.isAuthError = res.status === 401 || res.status === 403;
+          throw err;
+        }
+
+        const data = await res.json();
+        const rawContent = data.choices?.[0]?.message?.content;
+        return parseAIResponse(rawContent);
+      }
+    }
+
     class GeminiProvider {
       constructor(config = {}) {
         this.id = "gemini";
         this.displayName = "Google Gemini";
         this.apiKey = config.apiKey || "";
-        this.model = GeminiProvider.normalizeModelName(config.model || "gemini-2.5-flash");
+        this.model = GeminiProvider.normalizeModelName(config.model || "gemini-2.0-flash");
         this.enabled = config.enabled !== undefined ? config.enabled : true;
         this.baseUrl = "https://generativelanguage.googleapis.com/v1beta/models";
       }
 
       static normalizeModelName(raw) {
-        if (!raw || typeof raw !== "string") return "gemini-2.5-flash";
+        if (!raw || typeof raw !== "string") return "gemini-2.0-flash";
         let trimmed = raw.trim();
         while (trimmed.startsWith("/")) trimmed = trimmed.substring(1);
         while (trimmed.startsWith("models/")) trimmed = trimmed.substring("models/".length);
-        return trimmed || "gemini-2.5-flash";
+        if (trimmed.includes("3.8") || trimmed.includes("3.5") || trimmed.includes("3-flash")) {
+          return "gemini-2.0-flash";
+        }
+        return trimmed || "gemini-2.0-flash";
       }
 
       isEnabled() { return this.enabled && Boolean(this.apiKey); }
       getApiKey() { return this.apiKey; }
-      getModel() { return this.model || "gemini-2.5-flash"; }
+      getModel() { return this.model || "gemini-2.0-flash"; }
 
       maskApiKey(str) {
         if (!str || !this.apiKey) return str || "";
@@ -1985,7 +2115,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
 
         // If 404 model not found, try fallback models
         if (!res.ok && res.status === 404) {
-          const fallbackModels = ["gemini-2.0-flash", "gemini-1.5-flash"].filter(m => m !== activeModel);
+          const fallbackModels = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash"].filter(m => m !== activeModel);
           for (const nextModel of fallbackModels) {
             console.warn(`[Gemini] Model ${activeModel} unavailable (404). Trying ${nextModel}...`);
             activeModel = nextModel;
@@ -2028,11 +2158,13 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       constructor() {
         this.providers = {
           groq: new GroqProvider(),
-          cerebras: new CerebrasProvider(),
+          nvidia: new NvidiaProvider(),
+          deepseek: new DeepSeekProvider(),
           openrouter: new OpenRouterProvider(),
-          gemini: new GeminiProvider()
+          gemini: new GeminiProvider(),
+          cerebras: new CerebrasProvider()
         };
-        this.priority = ["groq", "cerebras", "openrouter", "gemini"];
+        this.priority = ["groq", "nvidia", "deepseek", "openrouter", "gemini", "cerebras"];
         this.activeProviderId = "groq";
         this.timeoutMs = 25000;
         this.cache = new Map();
@@ -2062,12 +2194,20 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           model: groqCfg.model || "llama-3.3-70b-versatile"
         });
 
-        // Cerebras
-        const cerCfg = cfg.cerebras || {};
-        this.providers.cerebras = new CerebrasProvider({
-          enabled: cerCfg.enabled !== undefined ? cerCfg.enabled : true,
-          apiKey: cerCfg.apiKey || data.cerebrasApiKey || "",
-          model: cerCfg.model || "llama3.3-70b"
+        // NVIDIA NIM
+        const nvdCfg = cfg.nvidia || {};
+        this.providers.nvidia = new NvidiaProvider({
+          enabled: nvdCfg.enabled !== undefined ? nvdCfg.enabled : true,
+          apiKey: nvdCfg.apiKey || data.nvidiaApiKey || "",
+          model: nvdCfg.model || "meta/llama-3.3-70b-instruct"
+        });
+
+        // DeepSeek
+        const dsCfg = cfg.deepseek || {};
+        this.providers.deepseek = new DeepSeekProvider({
+          enabled: dsCfg.enabled !== undefined ? dsCfg.enabled : true,
+          apiKey: dsCfg.apiKey || data.deepseekApiKey || "",
+          model: dsCfg.model || "deepseek-chat"
         });
 
         // OpenRouter
@@ -2083,7 +2223,15 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         this.providers.gemini = new GeminiProvider({
           enabled: gemCfg.enabled !== undefined ? gemCfg.enabled : true,
           apiKey: gemCfg.apiKey || data.key || data.geminiApiKey || "",
-          model: gemCfg.model || data.model || "gemini-2.5-flash"
+          model: gemCfg.model || data.model || "gemini-2.0-flash"
+        });
+
+        // Cerebras (for backward compatibility)
+        const cerCfg = cfg.cerebras || {};
+        this.providers.cerebras = new CerebrasProvider({
+          enabled: cerCfg.enabled !== undefined ? cerCfg.enabled : true,
+          apiKey: cerCfg.apiKey || data.cerebrasApiKey || "",
+          model: cerCfg.model || "llama3.3-70b"
         });
       }
 

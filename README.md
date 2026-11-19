@@ -42,7 +42,7 @@
 | **Video Lectures** | `video` | Completes and synchronizes playback progress for all course video lectures. |
 | **Solve Active Quiz** | `quiz` | Solves the currently open quiz attempt using Gemini AI and marks answers with live on-page feedback. |
 | **Auto-Solve on Open** | `autoQuiz` | Hardware toggle that automatically triggers the quiz solver whenever an `/attempt` page is opened. |
-| **Gemini Engine Config** | `key` / `model` | Configurable model selector (`gemini-3.8-flash`, `gemini-3.5-flash-lite`, `gemini-2.5-flash`) and local API key storage. |
+| **Multi-Provider AI Engine** | `activeProvider` / `model` | Configurable multi-provider architecture (Groq, NVIDIA NIM, DeepSeek, OpenRouter, Gemini, Cerebras) with dynamic model discovery and automatic failover. |
 
 ---
 

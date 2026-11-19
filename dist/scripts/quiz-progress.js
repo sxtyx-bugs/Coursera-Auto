@@ -9,9 +9,12 @@
   'use strict';
 
   const MODEL_DISPLAY_NAMES = {
-    "gemini-3.8-flash": "Gemini 3.8 Flash",
-    "gemini-3.5-flash": "Gemini 3.5 Flash",
-    "gemini-3-flash-preview": "Gemini 3 Flash"
+    "gemini-2.0-flash": "Gemini 2.0 Flash",
+    "gemini-1.5-flash": "Gemini 1.5 Flash",
+    "gemini-1.5-pro": "Gemini 1.5 Pro",
+    "gemini-2.5-flash": "Gemini 2.5 Flash",
+    "deepseek-chat": "DeepSeek V3",
+    "deepseek-reasoner": "DeepSeek R1"
   };
 
   const modelBadge = document.getElementById("modelBadge");
@@ -38,17 +41,17 @@
     const cleanId = String(modelId).replace(/^\/?(models\/)+/, "").trim();
     if (MODEL_DISPLAY_NAMES[cleanId]) {
       modelBadge.textContent = MODEL_DISPLAY_NAMES[cleanId];
+    } else if (cleanId.includes("•")) {
+      modelBadge.textContent = cleanId.length > 26 ? cleanId.slice(0, 24) + "..." : cleanId;
     } else if (cleanId.includes("llama-3.3") || cleanId.includes("llama3.3")) {
-      modelBadge.textContent = cleanId.toLowerCase().includes("groq")
-        ? "Groq • LLaMA 3.3"
-        : (cleanId.toLowerCase().includes("cerebras") ? "Cerebras • LLaMA 3.3" : "LLaMA 3.3 70B");
+      modelBadge.textContent = "LLaMA 3.3 70B";
     } else if (cleanId.includes("llama-3.1") || cleanId.includes("llama3.1")) {
       modelBadge.textContent = "LLaMA 3.1 8B";
-    } else if (cleanId.includes("gemini-2.5-flash")) {
-      modelBadge.textContent = "Gemini 2.5 Flash";
-    } else if (cleanId.includes("gemini-2.0-flash")) {
+    } else if (cleanId.includes("deepseek")) {
+      modelBadge.textContent = cleanId.includes("r1") ? "DeepSeek R1" : "DeepSeek V3";
+    } else if (cleanId.includes("gemini-2.0")) {
       modelBadge.textContent = "Gemini 2.0 Flash";
-    } else if (cleanId.includes("gemini-1.5-flash")) {
+    } else if (cleanId.includes("gemini-1.5")) {
       modelBadge.textContent = "Gemini 1.5 Flash";
     } else {
       modelBadge.textContent = cleanId.length > 22 ? cleanId.slice(0, 20) + "..." : cleanId;
@@ -185,9 +188,12 @@
 
   // Load configured model from storage on startup
   if (typeof chrome !== "undefined" && chrome?.storage?.local) {
-    chrome.storage.local.get(["model"], (data) => {
-      if (data?.model) {
-        setModelDisplay(data.model);
+    chrome.storage.local.get(["activeProvider", "providersConfig", "model"], (data) => {
+      const activeP = data?.activeProvider || "groq";
+      const pCfg = data?.providersConfig?.[activeP];
+      const model = pCfg?.model || data?.model;
+      if (model) {
+        setModelDisplay(`${activeP.toUpperCase()} • ${model}`);
       }
     });
   }

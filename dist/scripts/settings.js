@@ -2,10 +2,10 @@
  * Coursera Automation Extension - Multi-Provider Settings Controller (settings.js)
  * 
  * Manages user preferences for:
- * - Multi-provider AI quiz solving: Groq, Cerebras, OpenRouter, and Gemini
+ * - Multi-provider AI quiz solving: Groq, NVIDIA NIM, DeepSeek, OpenRouter, Gemini, Cerebras
  * - Primary provider & priority failover chain
  * - Request timeout limits & Auto-Solve toggle
- * - Direct connection testing with live status verification
+ * - Direct connection testing with live model discovery
  * - Discussion automation response delay speed
  */
 (() => {
@@ -17,10 +17,15 @@
       apiKey: "",
       model: "llama-3.3-70b-versatile"
     },
-    cerebras: {
+    nvidia: {
       enabled: true,
       apiKey: "",
-      model: "llama3.3-70b"
+      model: "meta/llama-3.3-70b-instruct"
+    },
+    deepseek: {
+      enabled: true,
+      apiKey: "",
+      model: "deepseek-chat"
     },
     openrouter: {
       enabled: true,
@@ -30,15 +35,22 @@
     gemini: {
       enabled: true,
       apiKey: "",
-      model: "gemini-2.5-flash"
+      model: "gemini-2.0-flash"
+    },
+    cerebras: {
+      enabled: true,
+      apiKey: "",
+      model: "llama3.3-70b"
     }
   };
 
   const PROVIDER_NAMES = {
     groq: "Groq",
-    cerebras: "Cerebras",
+    nvidia: "NVIDIA NIM",
+    deepseek: "DeepSeek",
     openrouter: "OpenRouter",
-    gemini: "Gemini"
+    gemini: "Gemini",
+    cerebras: "Cerebras"
   };
 
   document.addEventListener("DOMContentLoaded", () => {
@@ -59,24 +71,37 @@
         key: document.getElementById("groqKeyInput"),
         toggleKey: document.getElementById("groqToggleKey"),
         model: document.getElementById("groqModelSelect"),
+        refreshBtn: document.getElementById("groqRefreshBtn"),
         testBtn: document.getElementById("groqTestBtn"),
         badge: document.getElementById("groqStatusBadge"),
         feedback: document.getElementById("groqTestFeedback")
       },
-      cerebras: {
-        enable: document.getElementById("cerebrasEnableToggle"),
-        key: document.getElementById("cerebrasKeyInput"),
-        toggleKey: document.getElementById("cerebrasToggleKey"),
-        model: document.getElementById("cerebrasModelSelect"),
-        testBtn: document.getElementById("cerebrasTestBtn"),
-        badge: document.getElementById("cerebrasStatusBadge"),
-        feedback: document.getElementById("cerebrasTestFeedback")
+      nvidia: {
+        enable: document.getElementById("nvidiaEnableToggle"),
+        key: document.getElementById("nvidiaKeyInput"),
+        toggleKey: document.getElementById("nvidiaToggleKey"),
+        model: document.getElementById("nvidiaModelSelect"),
+        refreshBtn: document.getElementById("nvidiaRefreshBtn"),
+        testBtn: document.getElementById("nvidiaTestBtn"),
+        badge: document.getElementById("nvidiaStatusBadge"),
+        feedback: document.getElementById("nvidiaTestFeedback")
+      },
+      deepseek: {
+        enable: document.getElementById("deepseekEnableToggle"),
+        key: document.getElementById("deepseekKeyInput"),
+        toggleKey: document.getElementById("deepseekToggleKey"),
+        model: document.getElementById("deepseekModelSelect"),
+        refreshBtn: document.getElementById("deepseekRefreshBtn"),
+        testBtn: document.getElementById("deepseekTestBtn"),
+        badge: document.getElementById("deepseekStatusBadge"),
+        feedback: document.getElementById("deepseekTestFeedback")
       },
       openrouter: {
         enable: document.getElementById("openrouterEnableToggle"),
         key: document.getElementById("openrouterKeyInput"),
         toggleKey: document.getElementById("openrouterToggleKey"),
         model: document.getElementById("openrouterModelSelect"),
+        refreshBtn: document.getElementById("openrouterRefreshBtn"),
         testBtn: document.getElementById("openrouterTestBtn"),
         badge: document.getElementById("openrouterStatusBadge"),
         feedback: document.getElementById("openrouterTestFeedback")
@@ -86,9 +111,20 @@
         key: document.getElementById("geminiKeyInput"),
         toggleKey: document.getElementById("geminiToggleKey"),
         model: document.getElementById("geminiModelSelect"),
+        refreshBtn: document.getElementById("geminiRefreshBtn"),
         testBtn: document.getElementById("geminiTestBtn"),
         badge: document.getElementById("geminiStatusBadge"),
         feedback: document.getElementById("geminiTestFeedback")
+      },
+      cerebras: {
+        enable: document.getElementById("cerebrasEnableToggle"),
+        key: document.getElementById("cerebrasKeyInput"),
+        toggleKey: document.getElementById("cerebrasToggleKey"),
+        model: document.getElementById("cerebrasModelSelect"),
+        refreshBtn: document.getElementById("cerebrasRefreshBtn"),
+        testBtn: document.getElementById("cerebrasTestBtn"),
+        badge: document.getElementById("cerebrasStatusBadge"),
+        feedback: document.getElementById("cerebrasTestFeedback")
       }
     };
 
@@ -97,22 +133,26 @@
     const pillFb1 = document.getElementById("pillFb1");
     const pillFb2 = document.getElementById("pillFb2");
     const pillFb3 = document.getElementById("pillFb3");
+    const pillFb4 = document.getElementById("pillFb4");
 
     function updatePriorityChainDisplay(primaryId) {
       const activePrimary = primaryId || primarySelect?.value || "groq";
-      const remaining = ["groq", "cerebras", "openrouter", "gemini"].filter(id => id !== activePrimary);
+      const remaining = ["groq", "nvidia", "deepseek", "openrouter", "gemini", "cerebras"].filter(id => id !== activePrimary);
 
       if (pillPrimary) {
-        pillPrimary.textContent = `1. ${PROVIDER_NAMES[activePrimary]}`;
+        pillPrimary.textContent = `1. ${PROVIDER_NAMES[activePrimary] || activePrimary}`;
       }
       if (pillFb1 && remaining[0]) {
-        pillFb1.textContent = `2. ${PROVIDER_NAMES[remaining[0]]}`;
+        pillFb1.textContent = `2. ${PROVIDER_NAMES[remaining[0]] || remaining[0]}`;
       }
       if (pillFb2 && remaining[1]) {
-        pillFb2.textContent = `3. ${PROVIDER_NAMES[remaining[1]]}`;
+        pillFb2.textContent = `3. ${PROVIDER_NAMES[remaining[1]] || remaining[1]}`;
       }
       if (pillFb3 && remaining[2]) {
-        pillFb3.textContent = `4. ${PROVIDER_NAMES[remaining[2]]}`;
+        pillFb3.textContent = `4. ${PROVIDER_NAMES[remaining[2]] || remaining[2]}`;
+      }
+      if (pillFb4 && remaining[3]) {
+        pillFb4.textContent = `5. ${PROVIDER_NAMES[remaining[3]] || remaining[3]}`;
       }
     }
 
@@ -127,6 +167,94 @@
         if (!p.key) return;
         const isPass = p.key.type === "password";
         p.key.type = isPass ? "text" : "password";
+      });
+    });
+
+    /**
+     * Populate model select element for a provider
+     */
+    function populateProviderModels(pid, models, preferredModel) {
+      const p = providers[pid];
+      if (!p || !p.model) return;
+
+      const currentVal = preferredModel || p.model.value;
+      p.model.innerHTML = "";
+
+      let matched = false;
+      models.forEach(m => {
+        const opt = document.createElement("option");
+        opt.value = m.id;
+        opt.textContent = m.name || m.id;
+        if (currentVal && (currentVal === m.id || currentVal.endsWith(m.id))) {
+          opt.selected = true;
+          matched = true;
+        }
+        p.model.appendChild(opt);
+      });
+
+      if (currentVal && !matched) {
+        const customOpt = document.createElement("option");
+        customOpt.value = currentVal;
+        customOpt.textContent = `${currentVal} (Saved)`;
+        customOpt.selected = true;
+        p.model.insertBefore(customOpt, p.model.firstChild);
+      }
+
+      if (!currentVal && p.model.options.length > 0) {
+        p.model.options[0].selected = true;
+      }
+    }
+
+    // Refresh models button (↻) for each provider
+    Object.keys(providers).forEach(pid => {
+      const p = providers[pid];
+      p.refreshBtn?.addEventListener("click", () => {
+        const apiKey = p.key?.value?.trim() || "";
+        if (!apiKey) {
+          if (p.feedback) {
+            p.feedback.textContent = `Enter a ${PROVIDER_NAMES[pid]} API key first to discover models.`;
+            p.feedback.className = "test-feedback error";
+          }
+          p.key?.focus();
+          return;
+        }
+
+        p.refreshBtn.disabled = true;
+        if (p.feedback) {
+          p.feedback.textContent = `Discovering ${PROVIDER_NAMES[pid]} models...`;
+          p.feedback.className = "test-feedback";
+        }
+
+        chrome.runtime.sendMessage(
+          {
+            action: "FETCH_PROVIDER_MODELS",
+            payload: {
+              provider: pid,
+              apiKey: apiKey,
+              freeOnly: pid === "openrouter"
+            }
+          },
+          (response) => {
+            p.refreshBtn.disabled = false;
+            if (response && response.ok && Array.isArray(response.models) && response.models.length > 0) {
+              populateProviderModels(pid, response.models, p.model?.value);
+              if (p.feedback) {
+                p.feedback.textContent = `✓ Discovered ${response.models.length} accessible models.`;
+                p.feedback.className = "test-feedback success";
+              }
+              if (p.badge) {
+                p.badge.textContent = "Ready";
+                p.badge.className = "provider-status-badge status-connected";
+              }
+            } else {
+              const err = response?.error || "Discovery failed";
+              if (p.feedback) {
+                p.feedback.textContent = err.length > 60 ? err.slice(0, 57) + "..." : err;
+                p.feedback.className = "test-feedback error";
+              }
+            }
+          }
+        );
       });
     });
 
@@ -157,7 +285,7 @@
           p.badge.className = "provider-status-badge status-testing";
         }
         if (p.feedback) {
-          p.feedback.textContent = `Sending test request to ${PROVIDER_NAMES[pid]}...`;
+          p.feedback.textContent = `Verifying ${PROVIDER_NAMES[pid]} connection...`;
           p.feedback.className = "test-feedback";
         }
 
@@ -167,7 +295,8 @@
             payload: {
               provider: pid,
               apiKey: apiKey,
-              model: model
+              model: model,
+              freeOnly: pid === "openrouter"
             }
           },
           (response) => {
@@ -187,13 +316,17 @@
             }
 
             if (response?.ok) {
+              const count = response.modelsCount || 0;
               if (p.badge) {
                 p.badge.textContent = "Connected ✓";
                 p.badge.className = "provider-status-badge status-connected";
               }
               if (p.feedback) {
-                p.feedback.textContent = `✓ Connected to ${PROVIDER_NAMES[pid]} (${model})`;
+                p.feedback.textContent = `✓ Connected! ${count} accessible model${count === 1 ? '' : 's'} verified.`;
                 p.feedback.className = "test-feedback success";
+              }
+              if (Array.isArray(response.models) && response.models.length > 0) {
+                populateProviderModels(pid, response.models, p.model?.value);
               }
             } else {
               if (p.badge) {
@@ -230,8 +363,10 @@
         "key",
         "model",
         "groqApiKey",
-        "cerebrasApiKey",
-        "openrouterApiKey"
+        "nvidiaApiKey",
+        "deepseekApiKey",
+        "openrouterApiKey",
+        "cerebrasApiKey"
       ],
       stored => {
         if (!stored) return;
@@ -264,20 +399,30 @@
           providers.groq.badge.className = "provider-status-badge";
         }
 
-        // Cerebras
-        const cerCfg = cfg.cerebras || {};
-        if (providers.cerebras.enable && cerCfg.enabled !== undefined) providers.cerebras.enable.checked = cerCfg.enabled;
-        if (providers.cerebras.key) providers.cerebras.key.value = cerCfg.apiKey || stored.cerebrasApiKey || "";
-        if (providers.cerebras.model && cerCfg.model) providers.cerebras.model.value = cerCfg.model;
-        if (providers.cerebras.key?.value) {
-          providers.cerebras.badge.textContent = "Ready";
-          providers.cerebras.badge.className = "provider-status-badge";
+        // NVIDIA NIM
+        const nvdCfg = cfg.nvidia || {};
+        if (providers.nvidia.enable && nvdCfg.enabled !== undefined) providers.nvidia.enable.checked = nvdCfg.enabled;
+        if (providers.nvidia.key) providers.nvidia.key.value = nvdCfg.apiKey || stored.nvidiaApiKey || "";
+        if (providers.nvidia.model && nvdCfg.model) providers.nvidia.model.value = nvdCfg.model;
+        if (providers.nvidia.key?.value) {
+          providers.nvidia.badge.textContent = "Ready";
+          providers.nvidia.badge.className = "provider-status-badge";
         }
 
-        // OpenRouter
+        // DeepSeek
+        const dsCfg = cfg.deepseek || {};
+        if (providers.deepseek.enable && dsCfg.enabled !== undefined) providers.deepseek.enable.checked = dsCfg.enabled;
+        if (providers.deepseek.key) providers.deepseek.key.value = dsCfg.apiKey || stored.deepseekApiKey || "";
+        if (providers.deepseek.model && dsCfg.model) providers.deepseek.model.value = dsCfg.model;
+        if (providers.deepseek.key?.value) {
+          providers.deepseek.badge.textContent = "Ready";
+          providers.deepseek.badge.className = "provider-status-badge";
+        }
+
+        // OpenRouter (Fixed line 280 bug: strictly isolates openrouter key!)
         const orCfg = cfg.openrouter || {};
         if (providers.openrouter.enable && orCfg.enabled !== undefined) providers.openrouter.enable.checked = orCfg.enabled;
-        if (providers.openrouter.key) providers.openrouter.key.value = cerCfg.apiKey || stored.openrouterApiKey || orCfg.apiKey || "";
+        if (providers.openrouter.key) providers.openrouter.key.value = orCfg.apiKey || stored.openrouterApiKey || "";
         if (providers.openrouter.model && orCfg.model) providers.openrouter.model.value = orCfg.model;
         if (providers.openrouter.key?.value) {
           providers.openrouter.badge.textContent = "Ready";
@@ -289,12 +434,25 @@
         if (providers.gemini.enable && gemCfg.enabled !== undefined) providers.gemini.enable.checked = gemCfg.enabled;
         if (providers.gemini.key) providers.gemini.key.value = gemCfg.apiKey || stored.key || "";
         if (providers.gemini.model) {
-          const gemModel = gemCfg.model || stored.model || DEFAULT_PROVIDERS.gemini.model;
+          let gemModel = gemCfg.model || stored.model || DEFAULT_PROVIDERS.gemini.model;
+          if (gemModel.includes("3.8") || gemModel.includes("3.5")) {
+            gemModel = "gemini-2.0-flash";
+          }
           providers.gemini.model.value = gemModel;
         }
         if (providers.gemini.key?.value) {
           providers.gemini.badge.textContent = "Ready";
           providers.gemini.badge.className = "provider-status-badge";
+        }
+
+        // Cerebras
+        const cerCfg = cfg.cerebras || {};
+        if (providers.cerebras.enable && cerCfg.enabled !== undefined) providers.cerebras.enable.checked = cerCfg.enabled;
+        if (providers.cerebras.key) providers.cerebras.key.value = cerCfg.apiKey || stored.cerebrasApiKey || "";
+        if (providers.cerebras.model && cerCfg.model) providers.cerebras.model.value = cerCfg.model;
+        if (providers.cerebras.key?.value) {
+          providers.cerebras.badge.textContent = "Ready";
+          providers.cerebras.badge.className = "provider-status-badge";
         }
       }
     );
@@ -317,7 +475,7 @@
       const autoQuizVal = Boolean(autoQuizToggle?.checked);
 
       // Build priority list
-      const remaining = ["groq", "cerebras", "openrouter", "gemini"].filter(id => id !== primaryVal);
+      const remaining = ["groq", "nvidia", "deepseek", "openrouter", "gemini", "cerebras"].filter(id => id !== primaryVal);
       const priorityList = [primaryVal, ...remaining];
 
       // Build providers config
@@ -327,10 +485,15 @@
           apiKey: providers.groq.key?.value?.trim() || "",
           model: providers.groq.model?.value || DEFAULT_PROVIDERS.groq.model
         },
-        cerebras: {
-          enabled: Boolean(providers.cerebras.enable?.checked),
-          apiKey: providers.cerebras.key?.value?.trim() || "",
-          model: providers.cerebras.model?.value || DEFAULT_PROVIDERS.cerebras.model
+        nvidia: {
+          enabled: Boolean(providers.nvidia.enable?.checked),
+          apiKey: providers.nvidia.key?.value?.trim() || "",
+          model: providers.nvidia.model?.value || DEFAULT_PROVIDERS.nvidia.model
+        },
+        deepseek: {
+          enabled: Boolean(providers.deepseek.enable?.checked),
+          apiKey: providers.deepseek.key?.value?.trim() || "",
+          model: providers.deepseek.model?.value || DEFAULT_PROVIDERS.deepseek.model
         },
         openrouter: {
           enabled: Boolean(providers.openrouter.enable?.checked),
@@ -341,6 +504,11 @@
           enabled: Boolean(providers.gemini.enable?.checked),
           apiKey: providers.gemini.key?.value?.trim() || "",
           model: providers.gemini.model?.value || DEFAULT_PROVIDERS.gemini.model
+        },
+        cerebras: {
+          enabled: Boolean(providers.cerebras.enable?.checked),
+          apiKey: providers.cerebras.key?.value?.trim() || "",
+          model: providers.cerebras.model?.value || DEFAULT_PROVIDERS.cerebras.model
         }
       };
 
@@ -361,8 +529,10 @@
           model: updatedConfig.gemini.model,
           geminiApiKey: updatedConfig.gemini.apiKey,
           groqApiKey: updatedConfig.groq.apiKey,
-          cerebrasApiKey: updatedConfig.cerebras.apiKey,
-          openrouterApiKey: updatedConfig.openrouter.apiKey
+          nvidiaApiKey: updatedConfig.nvidia.apiKey,
+          deepseekApiKey: updatedConfig.deepseek.apiKey,
+          openrouterApiKey: updatedConfig.openrouter.apiKey,
+          cerebrasApiKey: updatedConfig.cerebras.apiKey
         },
         () => {
           saveBtn.disabled = false;
