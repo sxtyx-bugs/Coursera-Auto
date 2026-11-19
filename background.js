@@ -125,7 +125,7 @@
     }
 
     if (request.action === "OPEN_POPUP") {
-      chrome.action.openPopup?.().catch(() => {});
+      chrome.action.openPopup?.().catch(() => { });
       sendResponse({ success: true });
       return true;
     }
@@ -288,7 +288,7 @@
         try {
           const parsed = JSON.parse(res.text || "{}");
           msg = parsed.error?.message || parsed.message || msg;
-        } catch (_) {}
+        } catch (_) { }
         const err = new Error(`Groq: ${msg}`);
         err.status = res.status;
         throw err;
@@ -341,7 +341,7 @@
         try {
           const parsed = JSON.parse(res.text || "{}");
           msg = parsed.error?.message || parsed.message || msg;
-        } catch (_) {}
+        } catch (_) { }
         const err = new Error(`NVIDIA: ${msg}`);
         err.status = res.status;
         throw err;
@@ -407,7 +407,7 @@
         try {
           const parsed = JSON.parse(res.text || "{}");
           msg = parsed.error?.message || parsed.message || msg;
-        } catch (_) {}
+        } catch (_) { }
         const err = new Error(`DeepSeek: ${msg}`);
         err.status = res.status;
         throw err;
@@ -450,7 +450,7 @@
         try {
           const parsed = JSON.parse(res.text || "{}");
           msg = parsed.error?.message || parsed.message || msg;
-        } catch (_) {}
+        } catch (_) { }
         const err = new Error(`OpenRouter: ${msg}`);
         err.status = res.status;
         throw err;
@@ -507,7 +507,7 @@
         try {
           const parsed = JSON.parse(res.text || "{}");
           msg = parsed.error?.message || parsed.message || msg;
-        } catch (_) {}
+        } catch (_) { }
         const err = new Error(`Gemini: ${msg}`);
         err.status = res.status;
         throw err;

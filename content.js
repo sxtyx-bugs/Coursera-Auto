@@ -2480,38 +2480,41 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
      */
     function isElementVisible(el) {
       if (!el || !el.isConnected) return false;
+      if (el.getAttribute("aria-hidden") === "true" || el.hasAttribute("hidden")) return false;
+
       if (typeof window !== "undefined" && window.getComputedStyle) {
         try {
           const style = window.getComputedStyle(el);
-          if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return false;
-          if (parseFloat(style.fontSize) === 0 || (parseFloat(style.height) === 0 && parseFloat(style.width) === 0)) return false;
+          if (style.display === "none" || style.visibility === "hidden") return false;
+          // Inputs and labels styled by Coursera CDS may use opacity: 0 with visible parent/custom checkbox
+          if (style.opacity === "0" && !el.closest('input, label, [role="radio"], [role="checkbox"]')) return false;
+          if (parseFloat(style.fontSize) === 0) return false;
+          // Check for honeypot zero-clip
           if (style.clip === "rect(0px, 0px, 0px, 0px)" || style.clipPath === "inset(50%)") return false;
+          // Only check dimensions if element is not display: contents or inline
+          if (style.display !== "contents" && style.display !== "inline" && parseFloat(style.height) === 0 && parseFloat(style.width) === 0) {
+            return false;
+          }
         } catch (_) {}
       }
-      if (el.getAttribute("aria-hidden") === "true" || el.hasAttribute("hidden")) return false;
-      if (el.offsetParent === null) {
-        try {
-          if (window.getComputedStyle(el).position !== "fixed") return false;
-        } catch (_) {
-          return false;
-        }
-      }
+
+      // Check for off-screen canary honeypots (e.g. left: -9999px)
+      // NOTE: Never reject elements purely because rect.bottom < 0 (elements scrolled above viewport)
       if (typeof el.getBoundingClientRect === "function") {
         try {
           const rect = el.getBoundingClientRect();
-          if (rect.width === 0 && rect.height === 0) return false;
-          if (rect.bottom < -50 || rect.right < -50) return false;
+          if (rect.left < -1500 || rect.top < -50000) return false;
         } catch (_) {}
       }
+
       return true;
     }
 
     /**
-     * Determines whether an option input (radio button or checkbox) is truly visible
-     * and interactive on the page.
+     * Determines whether an option input (radio button or checkbox) is truly interactive
+     * and part of an assessment question on the page.
      * Coursera CDS styles native inputs with opacity: 0 and width/height: 0 while rendering
      * the visible interactive control within its parent label.
-     * This function checks label visibility and filters out actual honeypots and canaries.
      */
     function isOptionInputVisible(input) {
       if (!input || !input.isConnected) return false;
@@ -2532,7 +2535,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
 
       try {
         const lStyle = window.getComputedStyle(label);
-        if (lStyle.display === "none" || lStyle.visibility === "hidden" || lStyle.opacity === "0") return false;
+        if (lStyle.display === "none" || lStyle.visibility === "hidden") return false;
       } catch (_) {}
 
       // Check ancestors for hidden or off-screen honeypot styling
@@ -2545,21 +2548,21 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           if (style.position === "absolute" || style.position === "fixed") {
             const left = parseFloat(style.left);
             const top = parseFloat(style.top);
-            if (!isNaN(left) && (left < -500 || left > 50000)) return false;
-            if (!isNaN(top) && (top < -500 || top > 50000)) return false;
+            if (!isNaN(left) && (left < -1500 || left > 50000)) return false;
+            if (!isNaN(top) && (top < -50000 || top > 50000)) return false;
           }
         } catch (_) {}
         curr = curr.parentElement;
       }
 
-      // Check bounding rect of label (allow display: contents which has 0x0 rect)
+      // Check bounding rect of label (allow display: contents and scrolled-past content)
       try {
         const rect = label.getBoundingClientRect();
         if (rect.width === 0 && rect.height === 0) {
           const lStyle = window.getComputedStyle(label);
-          if (lStyle.display !== "contents") return false;
+          if (lStyle.display !== "contents" && lStyle.display !== "inline") return false;
         }
-        if (rect.bottom < -50 || rect.right < -50) return false;
+        if (rect.left < -1500 || rect.top < -50000) return false;
       } catch (_) {}
 
       // Filter out honeypot option text
@@ -2567,6 +2570,9 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         const optText = (label.textContent || "").trim();
         if (optText && isHoneypotQuestion(optText)) return false;
       } catch (_) {}
+
+      return true;
+    }
 
       return true;
     }
@@ -2654,96 +2660,146 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     }
 
     /**
-     * Finds visible quiz question containers on the page using resilient multi-selectors.
-     * Guarantees 1:1 question isolation and excludes outer submission part wrappers and honor code containers.
-     */
-    /**
-     * Finds all visible, genuine question containers on the page.
-     * Evaluates multiple container patterns without discarding mixed question formats
-     * (e.g. single-choice <fieldset> alongside multi-select <div> containers).
+     * Complete Multi-Strategy Question Container Discovery Engine.
+     * Combines 4 complementary strategies to discover every distinct question container:
+     * - Strategy 1: Known Coursera semantic & CSS container selectors.
+     * - Strategy 2: ARIA & Accessibility roles (fieldset, role="radiogroup", role="group", role="region").
+     * - Strategy 3: Bottom-up grouping from interactive answer controls (radios, checkboxes, text inputs).
+     * - Strategy 4: Leaf-container resolution ensuring independent 1:1 question isolation.
      */
     function findVisibleQuestionElements() {
+      const discoveredContainers = new Set();
+      const questionContainers = [];
+
+      // Helper to add container safely without duplicates
+      function addContainer(container, strategyName = "unknown") {
+        if (!container || !container.isConnected) return false;
+        if (isAcademicIntegrityDeclaration(container)) return false;
+
+        // Container must not be body, html, or main outer landmark wrapper
+        if (container === document.body || container === document.documentElement) return false;
+        const tag = container.tagName?.toLowerCase();
+        if (tag === "body" || tag === "html" || tag === "main") return false;
+
+        // Container must have at least one choice control or text input
+        const hasChoice = findQuestionOptionInputs(container).length > 0;
+        const hasText = Array.from(container.querySelectorAll('textarea, input[type="text"]')).some(isElementVisible);
+        if (!hasChoice && !hasText) return false;
+
+        if (!discoveredContainers.has(container)) {
+          discoveredContainers.add(container);
+          container._detectionStrategy = strategyName;
+          questionContainers.push(container);
+          return true;
+        }
+        return false;
+      }
+
+      // STRATEGY 1: Known Coursera semantic & CSS container selectors
       const candidateSelectors = [
-        'div[data-testid="question-item"]',
-        'div[data-testid*="question-item"]',
-        'div[data-testid*="QuestionItem"]',
-        'div[data-testid*="question_"]',
-        'div[data-testid*="Question_"]',
-        'fieldset[class*="question"]',
+        'div[data-testid*="question-item" i]',
+        'div[data-testid*="QuestionItem" i]',
+        'div[data-testid*="question_" i]',
+        'div[data-testid*="Question_" i]',
+        'div[data-testid*="form-part" i]',
+        'div[data-testid*="assessment-question" i]',
+        'fieldset[class*="question" i]',
         'fieldset[aria-label*="Question" i]',
         'fieldset',
         'div[role="group"][aria-label*="Question" i]',
+        'div[role="region"][aria-label*="Question" i]',
+        'div.rc-FormPartsQuestion',
         'div.rc-FormPart',
         'div[class*="rc-FormPart"]',
         'div.c-question',
         'div.c-question-part',
         'div[class*="c-question"]',
-        'div[class*="questionContainer"]',
-        'div[class*="QuestionContainer"]',
+        'div[class*="questionContainer" i]',
+        'div[class*="QuestionContainer" i]',
+        'div[class*="question-item" i]',
+        'div[class*="QuestionItem" i]',
+        'div[class*="questionWrapper" i]',
+        'div[class*="QuestionWrapper" i]',
+        'div[class*="QuestionPrompt" i]',
         'div.css-1tfphom'
       ];
 
-      // Query across all candidate selectors simultaneously
-      const allFound = [];
       for (const sel of candidateSelectors) {
         try {
           const els = Array.from(document.querySelectorAll(sel)).filter(isElementVisible);
           els.forEach(el => {
-            if (!allFound.includes(el)) allFound.push(el);
+            // Container should not span multiple distinct radio groups
+            const radioNames = new Set(
+              Array.from(el.querySelectorAll('input[type="radio"]'))
+                .filter(isOptionInputVisible)
+                .map(r => r.name)
+                .filter(Boolean)
+            );
+            if (radioNames.size <= 1) {
+              addContainer(el, "Strategy-1:CSS-Selector");
+            }
           });
         } catch (_) {}
       }
 
-      // Filter to containers that actually hold question inputs and are not integrity declarations
-      const validContainers = allFound.filter(el => {
-        if (isAcademicIntegrityDeclaration(el)) return false;
-        const hasChoice = Array.from(el.querySelectorAll('input[type="radio"], input[type="checkbox"], [role="radio"], [role="checkbox"]'))
-          .some(inp => isOptionInputVisible(inp) && !isAcademicIntegrityDeclaration(inp));
-        const hasText = Array.from(el.querySelectorAll('textarea, input[type="text"]')).some(isElementVisible);
-        if (!hasChoice && !hasText) return false;
+      // STRATEGY 2: Accessible groups and role-based containers
+      const ariaSelectors = [
+        '[role="radiogroup"]',
+        '[role="group"]',
+        'fieldset'
+      ];
+      for (const sel of ariaSelectors) {
+        try {
+          const groups = Array.from(document.querySelectorAll(sel)).filter(isElementVisible);
+          groups.forEach(grp => {
+            if (!isAcademicIntegrityDeclaration(grp)) {
+              addContainer(grp, "Strategy-2:ARIA-Role");
+            }
+          });
+        } catch (_) {}
+      }
 
-        // Container should not span multiple distinct radio groups
-        const radioNames = new Set(
-          Array.from(el.querySelectorAll('input[type="radio"]'))
-            .filter(isOptionInputVisible)
-            .map(r => r.name)
-            .filter(Boolean)
-        );
-        if (radioNames.size > 1) return false;
-
-        return true;
+      // STRATEGY 3: Bottom-up grouping from interactive answer controls
+      const allChoiceInputs = Array.from(
+        document.querySelectorAll('input[type="radio"], input[type="checkbox"], [role="radio"], [role="checkbox"], textarea, input[type="text"]')
+      ).filter(inp => {
+        if (isAcademicIntegrityDeclaration(inp)) return false;
+        if (inp.tagName === "TEXTAREA" || inp.type === "text") return isElementVisible(inp);
+        return isOptionInputVisible(inp);
       });
 
-      // Keep innermost / leaf containers (container must not contain another candidate container)
-      let questionContainers = validContainers.filter(el => {
-        return !validContainers.some(other => other !== el && el.contains(other));
-      });
-
-      // Verify that all visible choice inputs are accounted for
-      const allChoiceInputs = Array.from(document.querySelectorAll('input[type="radio"], input[type="checkbox"], textarea, input[type="text"]'))
-        .filter(inp => {
-          if (isAcademicIntegrityDeclaration(inp)) return false;
-          if (inp.tagName === "TEXTAREA" || inp.type === "text") return isElementVisible(inp);
-          return isOptionInputVisible(inp);
-        });
-
+      // Find any inputs not yet assigned to an existing question container
       const unassignedInputs = allChoiceInputs.filter(inp => {
-        return !questionContainers.some(c => c.contains(inp));
+        return !Array.from(discoveredContainers).some(c => c.contains(inp));
       });
 
-      if (unassignedInputs.length > 0) {
-        const fallbackGrouped = groupQuestionsByInputs(unassignedInputs);
-        fallbackGrouped.forEach(c => {
-          if (!questionContainers.includes(c)) questionContainers.push(c);
+      if (unassignedInputs.length > 0 || questionContainers.length === 0) {
+        const groupedContainers = groupQuestionsByInputs(unassignedInputs.length > 0 ? unassignedInputs : allChoiceInputs);
+        groupedContainers.forEach(c => {
+          addContainer(c, "Strategy-3:Control-Clustering");
         });
       }
 
-      if (questionContainers.length === 0) {
-        questionContainers = groupQuestionsByInputs(allChoiceInputs);
+      // STRATEGY 4: Leaf-container resolution (keep innermost containers)
+      let resolvedContainers = questionContainers.filter(el => {
+        return !questionContainers.some(other => other !== el && el.contains(other));
+      });
+
+      // Final pass: ensure all choice inputs belong to a resolved container
+      const finalUnassigned = allChoiceInputs.filter(inp => {
+        return !resolvedContainers.some(c => c.contains(inp));
+      });
+      if (finalUnassigned.length > 0) {
+        const extraGrouped = groupQuestionsByInputs(finalUnassigned);
+        extraGrouped.forEach(c => {
+          if (!resolvedContainers.includes(c) && !isAcademicIntegrityDeclaration(c)) {
+            resolvedContainers.push(c);
+          }
+        });
       }
 
       // Sort question containers strictly by visual DOM document position
-      questionContainers.sort((a, b) => {
+      resolvedContainers.sort((a, b) => {
         try {
           return (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) ? -1 : 1;
         } catch (_) {
@@ -2751,7 +2807,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         }
       });
 
-      return questionContainers;
+      return resolvedContainers;
     }
 
     /**
@@ -2781,7 +2837,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     function findCommonContainerForInputs(inputs) {
       if (!inputs || inputs.length === 0) return null;
       if (inputs.length === 1) {
-        return inputs[0].closest('fieldset, div[role="group"], div[data-testid*="question" i], div.rc-FormPart, div[class*="FormPart"], div.c-question') ||
+        return inputs[0].closest('fieldset, div[role="group"], div[data-testid*="question" i], div.rc-FormPartsQuestion, div.rc-FormPart, div[class*="FormPart"], div.c-question') ||
                inputs[0].parentElement?.parentElement?.parentElement ||
                inputs[0].parentElement?.parentElement ||
                inputs[0].parentElement;
@@ -2806,30 +2862,32 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       }
 
       return bestMatch ||
-             inputs[0].closest('fieldset, div[role="group"], div[data-testid*="question" i], div.rc-FormPart, div[class*="FormPart"], div.c-question') ||
+             inputs[0].closest('fieldset, div[role="group"], div[data-testid*="question" i], div.rc-FormPartsQuestion, div.rc-FormPart, div[class*="FormPart"], div.c-question') ||
              inputs[0].parentElement?.parentElement?.parentElement ||
              inputs[0].parentElement?.parentElement;
     }
 
     /**
-     * Fallback to group questions dynamically by radio input names and common parents.
+     * Groups questions dynamically by radio input names, checkbox clusters, and parent cards.
      */
-    function groupQuestionsByInputs() {
+    function groupQuestionsByInputs(targetInputs) {
       try {
-        const allInputs = Array.from(document.querySelectorAll('input[type="radio"], input[type="checkbox"], textarea, input[type="text"]')).filter(inp => {
+        const inputsToProcess = targetInputs || Array.from(
+          document.querySelectorAll('input[type="radio"], input[type="checkbox"], textarea, input[type="text"]')
+        ).filter(inp => {
           if (isAcademicIntegrityDeclaration(inp)) return false;
           if (inp.tagName === "TEXTAREA" || inp.type === "text") return isElementVisible(inp);
           return isOptionInputVisible(inp);
         });
 
-        if (allInputs.length === 0) return [];
+        if (inputsToProcess.length === 0) return [];
 
         const questionContainers = [];
         const processedInputs = new Set();
 
         // 1. Group radio buttons by name attribute
         const radioGroups = new Map();
-        allInputs.forEach(inp => {
+        inputsToProcess.forEach(inp => {
           if (inp.type === "radio") {
             const name = inp.name || "__unnamed__";
             if (!radioGroups.has(name)) radioGroups.set(name, []);
@@ -2847,9 +2905,9 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
 
         // 2. Group checkboxes by common parent container
         const checkboxGroups = new Map();
-        allInputs.forEach(inp => {
+        inputsToProcess.forEach(inp => {
           if (inp.type === "checkbox") {
-            const container = inp.closest('fieldset, div[role="group"], div[data-testid*="question" i], div.rc-FormPart, div[class*="FormPart"], div.c-question') ||
+            const container = inp.closest('fieldset, div[role="group"], div[data-testid*="question" i], div.rc-FormPartsQuestion, div.rc-FormPart, div[class*="FormPart"], div.c-question') ||
                               inp.parentElement?.parentElement?.parentElement ||
                               inp.parentElement?.parentElement;
             if (container) {
@@ -2866,8 +2924,8 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           }
         });
 
-        // 3. Any remaining text inputs or unassigned inputs
-        allInputs.forEach(inp => {
+        // 3. Group remaining text inputs or unassigned controls
+        inputsToProcess.forEach(inp => {
           if (processedInputs.has(inp)) return;
           const container = findCommonContainerForInputs([inp]);
           if (container && !questionContainers.includes(container)) {
@@ -2892,105 +2950,377 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       }
     }
 
-    function htmlToPlainText(html) {
-      if (!html) return "";
+    /**
+     * Extracts clean, human-readable option text from an interactive control or its associated label.
+     * Supports native labels, ARIA controls, CDS option cards, and nested markup.
+     */
+    function getOptionText(optControl) {
+      if (!optControl) return "";
+
+      // 1. Associated <label>
+      const label = optControl.closest("label") ||
+                    (optControl.id ? document.querySelector(`label[for="${optControl.id}"]`) : null);
+      if (label) {
+        const text = getCleanVisibleText(label).trim();
+        if (text && !isHoneypotQuestion(text)) return text;
+      }
+
+      // 2. Custom ARIA option container (role="radio" or role="checkbox")
+      if (optControl.getAttribute("role") === "radio" || optControl.getAttribute("role") === "checkbox") {
+        const ariaLabel = optControl.getAttribute("aria-label");
+        if (ariaLabel && !isHoneypotQuestion(ariaLabel)) return ariaLabel.trim();
+        const text = getCleanVisibleText(optControl).trim();
+        if (text && !isHoneypotQuestion(text)) return text;
+      }
+
+      // 3. Option container class (CDS Option, choiceBox, etc.)
+      const optionWrapper = optControl.closest(
+        '.rc-Option, div[class*="Option" i], div[class*="choice" i], div[class*="radio" i], div[class*="checkbox" i], li'
+      );
+      if (optionWrapper) {
+        const text = getCleanVisibleText(optionWrapper).trim();
+        if (text && !isHoneypotQuestion(text)) return text;
+      }
+
+      // 4. Parent element fallback
+      if (optControl.parentElement) {
+        const text = getCleanVisibleText(optControl.parentElement).trim();
+        if (text && !isHoneypotQuestion(text)) return text;
+      }
+
+      return "";
+    }
+
+    /**
+     * Extracts copyable question prompt text from a question container.
+     * Robust against nested HTML, formatting, code snippets, and non-question-mark prompts.
+     * Guarantees answer option text does NOT pollute or wipe out the question prompt.
+     */
+    function extractQuestionPrompt(qEl) {
+      if (!qEl) return "";
+
+      // 1. Direct prompt selector query
+      const promptSelectors = [
+        'legend',
+        '[data-testid*="question-prompt" i]',
+        '[data-testid*="QuestionPrompt" i]',
+        '[data-testid*="question-text" i]',
+        '[data-testid*="prompt" i]',
+        '.c-question-prompt',
+        'div[class*="c-question-prompt" i]',
+        'div[class*="question-prompt" i]',
+        'div[class*="QuestionPrompt" i]',
+        'div[class*="QuestionBody" i]',
+        'div.rc-QuestionBody',
+        'div[class*="question-text" i]'
+      ];
+
+      for (const sel of promptSelectors) {
+        try {
+          const promptEl = qEl.querySelector(sel);
+          if (promptEl && isElementVisible(promptEl)) {
+            // Verify this prompt element is NOT an answer option label
+            const isInsideOption = Boolean(promptEl.closest('label, [role="radio"], [role="checkbox"], div[class*="option" i], div[class*="choice" i]'));
+            if (!isInsideOption) {
+              const text = getCleanVisibleText(promptEl);
+              if (text && text.trim().length > 3 && !isHoneypotQuestion(text)) {
+                return sanitizeCourseraPromptInjection(text.trim());
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
+      // 2. Headings inside the question container (h1 - h6)
+      const headings = Array.from(qEl.querySelectorAll("h1, h2, h3, h4, h5, h6")).filter(isElementVisible);
+      for (const h of headings) {
+        if (!h.closest('label, [role="radio"], [role="checkbox"]')) {
+          const text = getCleanVisibleText(h);
+          if (text && text.trim().length > 5 && !isHoneypotQuestion(text)) {
+            return sanitizeCourseraPromptInjection(text.trim());
+          }
+        }
+      }
+
+      // 3. Structural fallback: Clone container and remove all answer option elements, buttons, badges
       try {
-        const doc = new DOMParser().parseFromString(html, "text/html");
+        const clone = qEl.cloneNode(true);
 
-        // Remove scripts, styles, honeypot elements, and hidden elements
-        const removeSelectors = [
-          "script",
-          "style",
-          "noscript",
-          '[data-action*="guideline"]',
-          '[data-action*="acknowledge"]',
-          '[class*="academic-integrity"]',
-          '[id*="academic-integrity"]',
-          '[aria-hidden="true"]',
-          '[hidden]',
-          '.sr-only',
-          '.visually-hidden',
-          '[style*="display: none"]',
-          '[style*="display:none"]',
-          '[style*="font-size: 0"]',
-          '[style*="font-size:0"]',
-          '[style*="visibility: hidden"]',
-          '[style*="visibility:hidden"]',
-          '[style*="opacity: 0"]',
-          '[style*="opacity:0"]'
+        // Remove all option wrappers and inputs
+        const optionRemovers = [
+          'label',
+          'input',
+          'button',
+          '[role="radio"]',
+          '[role="checkbox"]',
+          '.rc-Option',
+          'div[class*="option" i]',
+          'div[class*="choice" i]',
+          'div[class*="Radio" i]',
+          'div[class*="Checkbox" i]',
+          'div[class*="Option" i]',
+          '[class*="point" i]',
+          '[data-testid*="point" i]'
         ];
-        doc.querySelectorAll(removeSelectors.join(", ")).forEach(el => el.remove());
+        clone.querySelectorAll(optionRemovers.join(", ")).forEach(el => el.remove());
 
-        // Check any inline styles for hiding techniques
-        doc.querySelectorAll("*").forEach(el => {
-          const s = el.getAttribute("style") || "";
-          if (/display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0|font-size\s*:\s*0|left\s*:\s*-\d{3,}px|clip\s*:\s*rect\(0/i.test(s)) {
-            el.remove();
+        // Extract remaining copyable text
+        let cleanText = getCleanVisibleText(clone).trim();
+        // Remove point badges like "1 point", "10 points"
+        cleanText = cleanText.replace(/^\s*\d+\s*points?\s*/i, "").trim();
+
+        if (cleanText && cleanText.length > 3 && !isHoneypotQuestion(cleanText)) {
+          return sanitizeCourseraPromptInjection(cleanText);
+        }
+      } catch (_) {}
+
+      // 4. Last resort: raw text of container stripped of option texts
+      const rawText = getCleanVisibleText(qEl);
+      return sanitizeCourseraPromptInjection(rawText.trim());
+    }
+
+    /**
+     * Generates a stable, content-based fingerprint for deduplicating questions across
+     * multiple discovery sweeps and scrolling iterations.
+     */
+    function generateQuestionFingerprint(prompt, options = []) {
+      const normPrompt = (prompt || "")
+        .toLowerCase()
+        .normalize("NFKC")
+        .replace(/\s+/g, " ")
+        .replace(/[^\w\s]/g, "")
+        .trim();
+
+      const normOptions = (options || [])
+        .map(opt => (opt || "").toLowerCase().normalize("NFKC").replace(/\s+/g, " ").replace(/^[a-z0-9][\.\)\:\s]+/i, "").trim())
+        .filter(Boolean)
+        .sort()
+        .join("|");
+
+      return `${normPrompt}###${normOptions}`;
+    }
+
+    /**
+     * Validates question extraction and logs an extraction audit summary.
+     */
+    function validateExtraction(detectedContainers, extractedList, duplicatesCount = 0) {
+      const detectedCount = detectedContainers ? detectedContainers.length : 0;
+      let successfulCount = 0;
+      let incompleteCount = 0;
+      const incompleteDetails = [];
+
+      extractedList.forEach((item, idx) => {
+        const hasPrompt = Boolean(item.question && item.question.trim().length > 3);
+        const hasOptionsOrText = (Array.isArray(item.options) && item.options.length > 0) || item.type === "text";
+
+        if (hasPrompt && hasOptionsOrText) {
+          successfulCount++;
+        } else {
+          incompleteCount++;
+          incompleteDetails.push({
+            index: idx + 1,
+            missing: !hasPrompt ? "question text" : "answer options"
+          });
+        }
+      });
+
+      const summary = {
+        detected: detectedCount,
+        successfullyExtracted: successfulCount,
+        incomplete: incompleteCount,
+        duplicatesRemoved: duplicatesCount,
+        incompleteDetails
+      };
+
+      console.log(`[Extraction Engine] Summary: Detected: ${detectedCount} | Successfully extracted: ${successfulCount} | Incomplete: ${incompleteCount} | Duplicates removed: ${duplicatesCount}`);
+      if (incompleteCount > 0) {
+        console.warn("[Extraction Engine] Incomplete questions detected:", incompleteDetails);
+      }
+
+      return summary;
+    }
+
+    /**
+     * Diagnostic logger for developer inspection mode.
+     */
+    function logQuestionDiagnostics(questionList) {
+      console.group("[Extraction Engine Diagnostic Audit]");
+      questionList.forEach((q, idx) => {
+        console.log(`Q#${idx + 1}: [Strategy: ${q.detectionStrategy || 'Standard'}] [Type: ${q.type}] [Options: ${q.options ? q.options.length : 0}]`);
+        console.log(`  Prompt: "${q.question ? (q.question.length > 80 ? q.question.slice(0, 80) + '...' : q.question) : '<EMPTY>'}"`);
+        if (q.options && q.options.length > 0) {
+          console.log(`  Options sample: ${JSON.stringify(q.options.slice(0, 3))}${q.options.length > 3 ? ' ...' : ''}`);
+        }
+      });
+      console.groupEnd();
+    }
+
+    /**
+     * Complete Progressive Question Extraction Engine.
+     * Extracts every distinct available question across the webpage.
+     * Supports controlled scrolling to discover virtualized or delayed React content.
+     * Deduplicates across discovery sweeps using stable question fingerprints.
+     */
+    async function extractAllQuestionsFromDOM(options = {}) {
+      const enableScroll = options.enableScrollDiscovery !== false;
+      const discoveredQuestionsMap = new Map(); // fingerprint -> question object
+      let duplicatesRemoved = 0;
+
+      function scanCurrentDOM(strategyTag = "Initial-Scan") {
+        const containers = findVisibleQuestionElements();
+        containers.forEach((qEl) => {
+          const visibleInputs = findQuestionOptionInputs(qEl);
+          const hasCheckbox = visibleInputs.some(inp => inp.type === "checkbox" || inp.getAttribute("role") === "checkbox");
+          const isMcq = visibleInputs.length > 0;
+          const textInputs = Array.from(qEl.querySelectorAll('textarea, input[type="text"]')).filter(isElementVisible);
+          const isText = !isMcq && textInputs.length > 0;
+          const qType = isText ? "text" : (hasCheckbox ? "multiple-select" : "mcq");
+
+          // Extract option texts
+          const optionTexts = [];
+          visibleInputs.forEach(inp => {
+            const optText = getOptionText(inp);
+            if (optText && !optionTexts.includes(optText)) {
+              optionTexts.push(optText);
+            }
+          });
+
+          // Extract prompt text
+          const promptText = extractQuestionPrompt(qEl);
+          if (!promptText || isHoneypotQuestion(promptText)) {
+            return;
+          }
+
+          // If MCQ has 0 options, skip incomplete extraction in this sweep
+          if (isMcq && optionTexts.length === 0) {
+            return;
+          }
+
+          const fingerprint = generateQuestionFingerprint(promptText, optionTexts);
+          if (discoveredQuestionsMap.has(fingerprint)) {
+            duplicatesRemoved++;
+            // Update container reference to the freshest DOM element
+            const existing = discoveredQuestionsMap.get(fingerprint);
+            existing.container = qEl;
+            existing.visibleInputs = visibleInputs;
+          } else {
+            discoveredQuestionsMap.set(fingerprint, {
+              index: discoveredQuestionsMap.size,
+              question: promptText,
+              options: optionTexts,
+              type: qType,
+              isMultipleSelect: hasCheckbox,
+              container: qEl,
+              visibleInputs: visibleInputs,
+              textInputs: textInputs,
+              detectionStrategy: qEl._detectionStrategy || strategyTag
+            });
           }
         });
 
-        const rawText = doc.body.textContent || "";
-        return sanitizeCourseraPromptInjection(rawText);
-      } catch (e) {
-        return sanitizeCourseraPromptInjection(html);
+        return containers;
       }
+
+      // Initial scan
+      let detectedContainers = scanCurrentDOM("Initial-DOM");
+
+      // Progressive controlled scrolling if page has scrollable content
+      if (enableScroll && typeof window !== "undefined") {
+        const scrollHeight = Math.max(document.body?.scrollHeight || 0, document.documentElement?.scrollHeight || 0);
+        const windowHeight = window.innerHeight || 800;
+
+        if (scrollHeight > windowHeight * 1.3) {
+          const initialScrollY = window.scrollY;
+          const stepSize = Math.max(Math.floor(windowHeight * 0.7), 400);
+          const maxScrolls = Math.min(Math.ceil(scrollHeight / stepSize) + 1, 15);
+
+          console.log(`[Extraction Engine] Scrollable page detected (${scrollHeight}px). Running controlled discovery scan (${maxScrolls} steps)...`);
+
+          for (let step = 1; step <= maxScrolls; step++) {
+            const nextY = Math.min(step * stepSize, scrollHeight);
+            window.scrollTo({ top: nextY, behavior: "smooth" });
+            await sleep(250);
+            scanCurrentDOM(`Scroll-Step-${step}`);
+            if (nextY >= scrollHeight) break;
+          }
+
+          // Smoothly scroll back to original position
+          window.scrollTo({ top: initialScrollY, behavior: "smooth" });
+          await sleep(300);
+        }
+      }
+
+      // Final pass: re-index and sort in visual document order
+      const allDiscovered = Array.from(discoveredQuestionsMap.values());
+      allDiscovered.sort((a, b) => {
+        try {
+          if (a.container && b.container && a.container.isConnected && b.container.isConnected) {
+            return (a.container.compareDocumentPosition(b.container) & Node.DOCUMENT_POSITION_FOLLOWING) ? -1 : 1;
+          }
+        } catch (_) {}
+        return a.index - b.index;
+      });
+
+      allDiscovered.forEach((q, idx) => {
+        q.index = idx;
+      });
+
+      // Validation and diagnostic audit logging
+      validateExtraction(detectedContainers, allDiscovered, duplicatesRemoved);
+      logQuestionDiagnostics(allDiscovered);
+
+      return allDiscovered.length > 0 ? allDiscovered : null;
     }
 
+    /**
+     * Synchronous / instant extraction fallback for callers that do not require progressive scrolling.
+     */
     function extractQuestionsFromDOM() {
       try {
         const questionElements = findVisibleQuestionElements();
         if (!questionElements || questionElements.length === 0) return null;
 
         const extracted = [];
+        const seenFingerprints = new Set();
+
         questionElements.forEach((qEl, idx) => {
-          // Find all VISIBLE choice inputs (handling CDS styled opacity: 0 inputs)
           const visibleInputs = findQuestionOptionInputs(qEl);
           const hasCheckbox = visibleInputs.some(inp => inp.type === "checkbox" || inp.getAttribute("role") === "checkbox");
           const isMcq = visibleInputs.length > 0;
-          const qType = !isMcq ? "text" : (hasCheckbox ? "multiple-select" : "mcq");
-          const options = [];
+          const textInputs = Array.from(qEl.querySelectorAll('textarea, input[type="text"]')).filter(isElementVisible);
+          const isText = !isMcq && textInputs.length > 0;
+          const qType = isText ? "text" : (hasCheckbox ? "multiple-select" : "mcq");
 
-          visibleInputs.forEach((inp) => {
-            const label = inp.closest("label") ||
-                          (inp.id ? document.querySelector(`label[for="${inp.id}"]`) : null) ||
-                          inp.parentElement;
-            if (label) {
-              const optText = getCleanVisibleText(label);
-              // Drop honeypot options
-              if (optText && !isHoneypotQuestion(optText)) {
-                options.push(optText);
-              }
+          const options = [];
+          visibleInputs.forEach(inp => {
+            const optText = getOptionText(inp);
+            if (optText && !options.includes(optText)) {
+              options.push(optText);
             }
           });
 
-          // Find question prompt element
-          const promptEl = qEl.querySelector(".c-question-prompt, [data-testid='question-prompt'], div[class*='c-question-prompt'], div[class*='prompt'], div[class*='text']");
-          let promptText = promptEl ? getCleanVisibleText(promptEl) : getCleanVisibleText(qEl);
+          const promptText = extractQuestionPrompt(qEl);
+          if (!promptText || isHoneypotQuestion(promptText)) return;
+          if (isMcq && options.length === 0) return;
 
-          // Strip out the option texts from prompt if prompt was taken from whole container
-          options.forEach(opt => {
-            promptText = promptText.replace(opt, "");
-          });
-          promptText = sanitizeCourseraPromptInjection(promptText);
-
-          // If the question prompt is purely a honeypot trap, skip it!
-          if (!promptText || isHoneypotQuestion(promptText)) {
-            console.warn("[Coursera Assistant] Filtered out honeypot question trap from DOM.");
-            return;
-          }
+          const fingerprint = generateQuestionFingerprint(promptText, options);
+          if (seenFingerprints.has(fingerprint)) return;
+          seenFingerprints.add(fingerprint);
 
           extracted.push({
             index: idx,
+            question: promptText,
+            options: options,
             type: qType,
             isMultipleSelect: hasCheckbox,
-            options: options,
-            question: promptText
+            container: qEl,
+            visibleInputs: visibleInputs
           });
         });
 
         return extracted.length > 0 ? extracted : null;
       } catch (err) {
-        console.error("[Coursera Assistant] Error extracting questions from DOM:", err);
+        console.error("[Coursera Assistant] Error in extractQuestionsFromDOM:", err);
         return null;
       }
     }
@@ -3556,15 +3886,15 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           return;
         }
 
-        updateDockStatus("Extracting assignment questions...", "info");
-        notifyQuizProgress("loading_questions", { message: "Extracting assignment questions..." });
+        updateDockStatus("Extracting assignment questions across page...", "info");
+        notifyQuizProgress("loading_questions", { message: "Discovering all assignment questions across page..." });
 
-        // Extract questions from DOM with retries if still rendering
-        let domExtracted = extractQuestionsFromDOM();
+        // Extract questions from DOM with progressive discovery and controlled scrolling
+        let domExtracted = await extractAllQuestionsFromDOM({ enableScrollDiscovery: true });
         if (!domExtracted || domExtracted.length === 0) {
-          for (let r = 0; r < 3; r++) {
+          for (let r = 0; r < 2; r++) {
             await sleep(600);
-            domExtracted = extractQuestionsFromDOM();
+            domExtracted = await extractAllQuestionsFromDOM({ enableScrollDiscovery: true });
             if (domExtracted && domExtracted.length > 0) break;
           }
         }
@@ -3598,7 +3928,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         }
 
         const totalCount = parsedQuestions.length;
-        updateDockStatus(`Discovered ${totalCount} questions. Consulting AI...`, "info");
+        updateDockStatus(`Discovered ${totalCount} question${totalCount === 1 ? '' : 's'}. Consulting AI...`, "info");
         notifyQuizProgress("solving", {
           total: totalCount,
           message: `Discovered ${totalCount} question${totalCount === 1 ? '' : 's'} to solve.`
@@ -3621,7 +3951,18 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         const modelUsed = solveResult.model;
         const isCached = solveResult.isCached;
 
-        console.log(`[AI Solver] Answers from ${providerUsed} (${modelUsed}):`, answers);
+        // Ensure 1:1 question metadata association
+        answers.forEach((ans, idx) => {
+          if (parsedQuestions[idx]) {
+            if (!ans.question) ans.question = parsedQuestions[idx].question;
+            if (!ans.options) ans.options = parsedQuestions[idx].options;
+            if (!ans.type) ans.type = parsedQuestions[idx].type;
+            if (ans.isMultipleSelect === undefined) ans.isMultipleSelect = parsedQuestions[idx].isMultipleSelect;
+            ans.questionIndex = idx;
+          }
+        });
+
+        console.log(`[AI Solver] Answers from ${providerUsed} (${modelUsed}) [${answers.length} items]:`, answers);
 
         // 3. Process each question sequentially with smooth scrolling, pacing & visual verification
         updateDockStatus(`Applying answers via ${providerUsed}...`, "info");
@@ -4146,15 +4487,14 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
 
         // Align question: check if prompt matches an answer entry, otherwise fallback to index
         let answer = aiAnswers[index];
-        const promptEl = questionEl.querySelector(".c-question-prompt, [data-testid*='prompt'], [class*='prompt'], legend, h3, h4");
-        const qPrompt = promptEl ? getCleanVisibleText(promptEl) : "";
+        const qPrompt = extractQuestionPrompt(questionEl);
 
         if (qPrompt) {
           const promptMatch = aiAnswers.find(a => {
             if (!a || !a.question || typeof a.question !== "string") return false;
             const aQ = a.question.trim().toLowerCase();
             const domQ = qPrompt.trim().toLowerCase();
-            return (domQ.length > 8 && aQ.includes(domQ)) || (aQ.length > 8 && domQ.includes(aQ));
+            return (domQ.length > 8 && (aQ.includes(domQ) || domQ.includes(aQ)));
           });
           if (promptMatch) {
             answer = promptMatch;
