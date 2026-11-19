@@ -731,6 +731,28 @@
         // Consume lastError to prevent uncaught error when content script is not yet injected
         chrome.runtime.lastError;
       });
+
+      // Auto-Quiz navigation event: if on coursera.org/learn and on an attempt or assessment page
+      if (tab.url.startsWith("https://www.coursera.org/learn")) {
+        try {
+          const urlpath = new URL(tab.url).pathname.toLowerCase();
+          if (
+            urlpath.endsWith("/attempt") ||
+            urlpath.includes("/exam/") ||
+            urlpath.includes("/quiz/") ||
+            urlpath.includes("/assignment-submission/") ||
+            urlpath.includes("/assignment/")
+          ) {
+            chrome.tabs.sendMessage(
+              tabId,
+              { action: "attempt" },
+              function () {
+                chrome.runtime.lastError;
+              }
+            );
+          }
+        } catch (_) {}
+      }
     }
   });
 

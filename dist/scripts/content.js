@@ -2400,7 +2400,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     }
 
     const aiSolverInstance = new MultiProviderAISolver();
-    let autoQuizEnabled = false;
+    let autoQuizEnabled = true;
     let questionsJson = null;
     let isSolvingQuiz = false;
 
@@ -3278,40 +3278,190 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     }
 
     let launchedAssignmentPaths = new Set();
+    let autoSolvedAttemptKeys = new Set();
     let isLaunchingAssignment = false;
+    let assignmentQuestionsObserver = null;
+    let pendingAutoSolveTimeout = null;
 
     /**
-     * Assignment Launch Workflow:
-     * 1. Detect assignment landing page.
-     * 2. Locate Start Assignment button.
-     * 3. Click it automatically.
-     * 4. Wait exactly 4 seconds after navigation or assignment initialization.
-     * 5. Detect whether actual assignment questions have loaded (waits for DOM if still loading).
-     * 6. Display the in-page Auto Solve dock on the opened assignment.
-     * Does NOT repeatedly click Start Assignment or restart an already active attempt.
+     * Extracts a normalized attempt key from the current window location.
+     * Strips trailing slashes, hash fragments (#...), and query parameters (?...)
+     * so that navigating between questions within the same attempt does NOT create a new key.
+     */
+    function getAssignmentAttemptKey() {
+      try {
+        const path = (window.location.pathname || "").replace(/\/+$/, "").toLowerCase();
+        return path || window.location.href.split("?")[0].split("#")[0].toLowerCase();
+      } catch (_) {
+        return (window.location.pathname || "").toLowerCase();
+      }
+    }
+
+    /**
+     * Resets automation tracking state when a genuinely new assignment attempt begins
+     * or when the user retakes / restarts an attempt.
+     */
+    function resetAssignmentAttemptState() {
+      console.log("[Assignment Workflow] Resetting assignment attempt tracking state.");
+      autoSolvedAttemptKeys.clear();
+      launchedAssignmentPaths.clear();
+      if (assignmentQuestionsObserver) {
+        assignmentQuestionsObserver.disconnect();
+        assignmentQuestionsObserver = null;
+      }
+      if (pendingAutoSolveTimeout) {
+        clearTimeout(pendingAutoSolveTimeout);
+        pendingAutoSolveTimeout = null;
+      }
+    }
+
+    // Global listener to detect Retake / Try Again / Start New Attempt button clicks
+    if (typeof document !== "undefined") {
+      document.addEventListener("click", (e) => {
+        const target = e.target;
+        const btn = target?.closest?.("button, a");
+        if (!btn) return;
+        const text = (btn.innerText || btn.textContent || "").toLowerCase().trim();
+        if (
+          /^(retake|try\s+again|take\s+again|start\s+new\s+attempt|retake\s+quiz|retake\s+assignment|retake\s+exam)$/i.test(text) ||
+          btn.getAttribute("data-testid")?.includes("retake") ||
+          btn.getAttribute("data-testid")?.includes("try-again")
+        ) {
+          console.log("[Assignment Workflow] Detected Retake/Try Again button click. Clearing attempt deduplication cache.");
+          resetAssignmentAttemptState();
+        }
+      }, true);
+    }
+
+    /**
+     * Triggers the existing Auto Solve function (solveQuiz) automatically for an eligible assignment attempt.
+     * Prevents multiple triggers for the same attempt.
+     */
+    async function triggerAutoSolveIfEligible() {
+      if (isSolvingQuiz || isLaunchingAssignment) return;
+
+      const attemptKey = getAssignmentAttemptKey();
+
+      if (!autoQuizEnabled) {
+        console.log("[Assignment Workflow] Auto-quiz is toggled off in settings. Dock mounted for manual solve.");
+        ensureAutoSolveDockMounted();
+        return;
+      }
+
+      if (!aiSolverInstance.hasConfiguredProvider()) {
+        console.log("[Assignment Workflow] No AI API key configured. Dock mounted for manual solve.");
+        ensureAutoSolveDockMounted();
+        return;
+      }
+
+      if (autoSolvedAttemptKeys.has(attemptKey)) {
+        // Already auto-solved for this attempt.
+        // User navigating between questions or scrolling must NOT re-trigger solving.
+        ensureAutoSolveDockMounted();
+        return;
+      }
+
+      // Mark attempt key immediately to avoid race conditions with asynchronous DOM events
+      autoSolvedAttemptKeys.add(attemptKey);
+      ensureAutoSolveDockMounted();
+      updateDockStatus("Assignment test detected. Auto-solving in 500ms...", "info");
+      console.log(`[Assignment Workflow] Automatically triggering solveQuiz for attempt: ${attemptKey}`);
+
+      if (pendingAutoSolveTimeout) {
+        clearTimeout(pendingAutoSolveTimeout);
+      }
+
+      pendingAutoSolveTimeout = setTimeout(async () => {
+        pendingAutoSolveTimeout = null;
+        if (!isSolvingQuiz) {
+          await solveQuiz();
+        }
+      }, 500);
+    }
+
+    /**
+     * Attaches a MutationObserver to watch for dynamically loaded assignment questions.
+     */
+    function attachAssignmentQuestionsObserver() {
+      if (assignmentQuestionsObserver) return;
+      if (typeof MutationObserver === "undefined") return;
+
+      const targetNode = document.querySelector("#rendered-content, .rc-AssignmentApp, main, [role='main']") || document.body;
+      if (!targetNode) return;
+
+      console.log("[Assignment Workflow] Watching for dynamically rendered questions via MutationObserver...");
+      let checkTimer = null;
+      assignmentQuestionsObserver = new MutationObserver(() => {
+        if (checkTimer) return;
+        checkTimer = setTimeout(async () => {
+          checkTimer = null;
+          if (hasLoadedAssignmentQuestions()) {
+            console.log("[Assignment Workflow] MutationObserver detected questions loaded in DOM.");
+            if (assignmentQuestionsObserver) {
+              assignmentQuestionsObserver.disconnect();
+              assignmentQuestionsObserver = null;
+            }
+            ensureAutoSolveDockMounted();
+            await triggerAutoSolveIfEligible();
+          }
+        }, 300);
+      });
+
+      assignmentQuestionsObserver.observe(targetNode, {
+        childList: true,
+        subtree: true
+      });
+
+      // Safety timeout to avoid lingering observers
+      setTimeout(() => {
+        if (assignmentQuestionsObserver) {
+          assignmentQuestionsObserver.disconnect();
+          assignmentQuestionsObserver = null;
+        }
+      }, 30000);
+    }
+
+    /**
+     * Assignment Launch & Auto Solve Workflow:
+     * 1. Detect assignment landing or attempt page.
+     * 2. If on landing page with "Start Assignment", click it automatically and wait 4s.
+     * 3. Wait for questions to finish loading in DOM (via polling and MutationObserver).
+     * 4. Automatically trigger solveQuiz() for the attempt.
+     * 5. Does NOT repeatedly click Start Assignment or restart already solved attempt.
+     * 6. Does NOT trigger when navigating between questions in the same attempt.
      */
     async function checkAndHandleAssignmentLaunch() {
       if (isLaunchingAssignment || isSolvingQuiz) return;
 
       if (!isEligibleAssignmentPage()) {
         removeAutoSolveDock();
+        if (assignmentQuestionsObserver) {
+          assignmentQuestionsObserver.disconnect();
+          assignmentQuestionsObserver = null;
+        }
         return;
       }
 
       const currentPath = window.location.pathname;
 
-      // If questions are already active and loaded, mount the dock directly
+      // 1. If questions are already active and loaded in DOM
       if (hasLoadedAssignmentQuestions()) {
         ensureAutoSolveDockMounted();
+        if (assignmentQuestionsObserver) {
+          assignmentQuestionsObserver.disconnect();
+          assignmentQuestionsObserver = null;
+        }
+        await triggerAutoSolveIfEligible();
         return;
       }
 
-      // If on an assignment landing/overview page with a Start button
+      // 2. If on an assignment landing/overview page with a Start button
       const startBtn = findAssignmentStartButton();
       if (startBtn) {
         if (launchedAssignmentPaths.has(currentPath)) {
-          // Already launched this attempt path once — do not re-trigger
+          // Already launched this attempt path once — keep dock mounted and wait for questions
           ensureAutoSolveDockMounted();
+          attachAssignmentQuestionsObserver();
           return;
         }
 
@@ -3332,25 +3482,33 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
 
           // Wait for actual assignment questions to render in DOM
           const questionsLoaded = await waitForAssignmentQuestionsToLoad(15000);
-          console.log(`[Assignment Workflow] Questions loaded: ${questionsLoaded}`);
+          console.log(`[Assignment Workflow] Questions loaded after launch: ${questionsLoaded}`);
 
-          // Display the Auto Solve button dock on the opened assignment
           ensureAutoSolveDockMounted();
+
+          if (questionsLoaded) {
+            await triggerAutoSolveIfEligible();
+          } else {
+            attachAssignmentQuestionsObserver();
+          }
         } catch (err) {
           console.error("[Assignment Workflow] Error launching assignment:", err);
         } finally {
           isLaunchingAssignment = false;
         }
-      } else {
-        // Active attempt URL without separate landing button
-        if (
-          currentPath.endsWith("/attempt") ||
-          currentPath.includes("/exam/") ||
-          currentPath.includes("/quiz/") ||
-          currentPath.includes("/assignment-submission/")
-        ) {
-          ensureAutoSolveDockMounted();
-        }
+        return;
+      }
+
+      // 3. Active assessment URL structure without questions loaded yet (loading spinner / hydration)
+      if (
+        currentPath.endsWith("/attempt") ||
+        currentPath.includes("/exam/") ||
+        currentPath.includes("/quiz/") ||
+        currentPath.includes("/assignment-submission/") ||
+        currentPath.includes("/assignment/")
+      ) {
+        ensureAutoSolveDockMounted();
+        attachAssignmentQuestionsObserver();
       }
     }
 
@@ -4086,6 +4244,17 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       if (actionName === "quiz") {
         (async () => {
           await solveQuiz();
+          sendResponse({ received: true });
+        })();
+        return true;
+      }
+
+      // Auto-quiz message from background.js navigation listener
+      if (actionName === "attempt") {
+        (async () => {
+          if (typeof debouncedAssignmentCheck === "function") {
+            debouncedAssignmentCheck();
+          }
           sendResponse({ received: true });
         })();
         return true;

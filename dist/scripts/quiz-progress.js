@@ -111,7 +111,7 @@
 
       case "solving":
         if (statusTitle) statusTitle.textContent = "AI reasoning in progress...";
-        if (statusSubtitle) statusSubtitle.textContent = message || "Gemini is analyzing questions and verifying answers...";
+        if (statusSubtitle) statusSubtitle.textContent = message || "AI is analyzing questions and verifying answers...";
         if (stepBarFill) stepBarFill.style.width = "65%";
         setStepState(step1, "done");
         setStepState(step2, "active");

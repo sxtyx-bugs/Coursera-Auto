@@ -397,9 +397,10 @@
       ["quiz", "activeProvider", "providersConfig", "key", "model", "groqApiKey", "nvidiaApiKey", "deepseekApiKey", "openrouterApiKey"],
       (data) => {
         if (!data) return;
-        if (quizToggle && data.quiz !== undefined) {
-          quizToggle.checked = Boolean(data.quiz);
-          updateBadge(Boolean(data.quiz));
+        if (quizToggle) {
+          const isEnabled = data.quiz !== undefined ? Boolean(data.quiz) : true;
+          quizToggle.checked = isEnabled;
+          updateBadge(isEnabled);
         }
 
         if (data.providersConfig) {
