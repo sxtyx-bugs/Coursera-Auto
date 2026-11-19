@@ -110,69 +110,9 @@
   }
 
   // -------------------------------------------------------------
-  // Persistent Quiz Progress Window Management
+  // Quiz Progress State Management (In-Memory Relay Only — No Window Clutter)
   // -------------------------------------------------------------
-  let quizProgressWindowId = null;
   let latestQuizProgress = null;
-  let quizCloseTimeoutId = null;
-
-  async function openOrCreateQuizProgressWindow() {
-    if (quizCloseTimeoutId) {
-      clearTimeout(quizCloseTimeoutId);
-      quizCloseTimeoutId = null;
-    }
-
-    if (quizProgressWindowId !== null) {
-      try {
-        const win = await chrome.windows.get(quizProgressWindowId);
-        if (win) {
-          await chrome.windows.update(quizProgressWindowId, { focused: true });
-          return quizProgressWindowId;
-        }
-      } catch (e) {
-        quizProgressWindowId = null;
-      }
-    }
-
-    try {
-      const createdWindow = await chrome.windows.create({
-        url: chrome.runtime.getURL("quiz-progress.html"),
-        type: "popup",
-        width: 360,
-        height: 460,
-        focused: true
-      });
-      quizProgressWindowId = createdWindow.id;
-      return quizProgressWindowId;
-    } catch (err) {
-      console.warn("[Quiz Window] Failed to create persistent window:", err);
-      return null;
-    }
-  }
-
-  function closeQuizProgressWindow() {
-    if (quizCloseTimeoutId) {
-      clearTimeout(quizCloseTimeoutId);
-      quizCloseTimeoutId = null;
-    }
-    if (quizProgressWindowId !== null) {
-      const winId = quizProgressWindowId;
-      quizProgressWindowId = null;
-      try {
-        chrome.windows.remove(winId).catch(() => {});
-      } catch (e) {}
-    }
-  }
-
-  chrome.windows?.onRemoved?.addListener((removedWindowId) => {
-    if (removedWindowId === quizProgressWindowId) {
-      quizProgressWindowId = null;
-      if (quizCloseTimeoutId) {
-        clearTimeout(quizCloseTimeoutId);
-        quizCloseTimeoutId = null;
-      }
-    }
-  });
 
   // -------------------------------------------------------------
   // Message Listener for Extension Actions
@@ -456,17 +396,13 @@
       return true;
     }
 
-    // Quiz Progress Window Handlers & Relays
+    // Quiz Progress State Relays (Maintains in-memory progress for popup UI without external popup windows)
     if (request.action === "OPEN_QUIZ_WINDOW") {
-      (async () => {
-        const winId = await openOrCreateQuizProgressWindow();
-        sendResponse({ success: true, windowId: winId });
-      })();
+      sendResponse({ success: true, windowId: null });
       return true;
     }
 
     if (request.action === "CLOSE_QUIZ_WINDOW") {
-      closeQuizProgressWindow();
       sendResponse({ success: true });
       return true;
     }
@@ -478,28 +414,6 @@
 
     if (request.action === "QUIZ_PROGRESS") {
       latestQuizProgress = request.payload;
-
-      // Automatically open or focus the persistent window when quiz starts
-      if (request.payload?.state === "starting" || quizProgressWindowId === null) {
-        openOrCreateQuizProgressWindow().catch(() => {});
-      }
-
-      // If completed, keep visible for ~3-5 seconds then close
-      if (request.payload?.state === "completed") {
-        if (quizCloseTimeoutId) clearTimeout(quizCloseTimeoutId);
-        quizCloseTimeoutId = setTimeout(() => {
-          closeQuizProgressWindow();
-        }, 4000);
-      }
-
-      // If error occurs, keep open and cancel any pending auto-close
-      if (request.payload?.state === "error") {
-        if (quizCloseTimeoutId) {
-          clearTimeout(quizCloseTimeoutId);
-          quizCloseTimeoutId = null;
-        }
-      }
-
       sendResponse({ received: true });
       return true;
     }
@@ -526,23 +440,6 @@
         // Consume lastError to prevent uncaught error when content script is not yet injected
         chrome.runtime.lastError;
       });
-
-      // Auto-Quiz trigger: if on coursera.org/learn and on an attempt or quiz/exam overview page
-      if (tab.url.startsWith("https://www.coursera.org/learn")) {
-        try {
-          const urlpath = new URL(tab.url).pathname;
-          if (
-            urlpath.endsWith("attempt") ||
-            urlpath.includes("/exam/") ||
-            urlpath.includes("/quiz/") ||
-            urlpath.includes("/assignment-submission/")
-          ) {
-            chrome.tabs.sendMessage(tabId, "attempt", function () {
-              chrome.runtime.lastError;
-            });
-          }
-        } catch (e) {}
-      }
     }
   });
 

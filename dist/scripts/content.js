@@ -161,145 +161,37 @@
     });
 
     /**
-     * Displays a toast notification in the center-top of the screen
+     * Non-intrusive status notification logger.
+     * Updates the in-page assignment dock if mounted and logs to console without toast DOM clutter.
      */
     const showToast = (message, type = "success", keep = false) => {
-      let container = document.getElementById("ext-toast-container");
-      if (!container) {
-        container = document.createElement("div");
-        container.id = "ext-toast-container";
-        Object.assign(container.style, {
-          position: "fixed",
-          top: "24px",
-          left: "50%",
-          transform: "translateX(-50%)",
-          zIndex: "2147483647",
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          gap: "8px",
-          pointerEvents: "none"
-        });
-        document.body.appendChild(container);
+      console.log(`[Coursera Assistant] [${type}] ${message}`);
+      if (typeof updateDockStatus === "function") {
+        updateDockStatus(message, type);
       }
 
-      let toastMain = document.getElementById("ext-toast-main");
-      const accentColor = type === "success" ? "#10b981" : type === "error" ? "#ef4444" : type === "warn" ? "#f59e0b" : "#2563eb";
-      if (!toastMain) {
-        toastMain = document.createElement("div");
-        toastMain.id = "ext-toast-main";
-        Object.assign(toastMain.style, {
-          background: "#14161c",
-          color: "#f3f4f6",
-          border: "1px solid #2b303e",
-          borderLeft: `3px solid ${accentColor}`,
-          padding: "9px 18px",
-          borderRadius: "6px",
-          boxShadow: "0 4px 16px rgba(0,0,0,0.5), 0 1px 3px rgba(0,0,0,0.3)",
-          fontSize: "12.5px",
-          fontWeight: "500",
-          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif',
-          opacity: "1",
-          transform: "translateY(0)",
-          transition: "opacity 0.2s ease, transform 0.2s ease",
-          maxWidth: "90vw",
-          textAlign: "center",
-          minWidth: "220px",
-          lineHeight: "1.4"
-        });
-        container.appendChild(toastMain);
-      }
-
-      toastMain.textContent = message;
-      toastMain.style.borderLeft = `3px solid ${accentColor}`;
-
-      const win = window;
-      if (!keep) {
-        if (win.extToastTimeout) {
-          clearTimeout(win.extToastTimeout);
-        }
-        win.extToastTimeout = setTimeout(() => {
-          toastMain.style.opacity = "0";
-          toastMain.style.transform = "translateY(-4px)";
-          setTimeout(() => toastMain.remove(), 250);
-        }, 3500);
-      }
+      // Proactively clean up any legacy toast containers from DOM
+      try {
+        const legacyContainer = document.getElementById("ext-toast-container");
+        if (legacyContainer) legacyContainer.remove();
+        const legacyToasts = document.querySelector(".toasts");
+        if (legacyToasts) legacyToasts.remove();
+      } catch (_) {}
     };
 
     /**
-     * Toast notification manager for feature-specific alerts
+     * Lightweight ToastNotificationManager stub for backwards compatibility.
+     * Prevents runtime errors while keeping the page 100% free of popup toast DOM clutter.
      */
     class ToastNotificationManager {
-      constructor() {
-        this.toasts = null;
-        this.init();
-      }
-
-      init() {
-        if (!document.querySelector(".toasts")) {
-          this.createToastContainer();
-        }
-      }
-
-      createToastContainer() {
-        this.toasts = document.createElement("div");
-        this.toasts.className = "toasts";
-        this.toasts.style.position = "fixed";
-        this.toasts.style.top = "20px";
-        this.toasts.style.left = "50%";
-        this.toasts.style.transform = "translateX(-50%)";
-        this.toasts.style.zIndex = "9999";
-        this.toasts.style.display = "flex";
-        this.toasts.style.flexDirection = "column";
-        this.toasts.style.gap = "10px";
-        document.body.appendChild(this.toasts);
-      }
-
       error(msg) {
-        const toast = this.createToast(msg, "red");
-        this.displayToast(toast);
+        showToast(msg, "error");
       }
-
       success(msg) {
-        const toast = this.createToast(msg, "green");
-        this.displayToast(toast);
+        showToast(msg, "success");
       }
-
       info(msg) {
-        const toast = this.createToast(msg, "blue");
-        this.displayToast(toast);
-      }
-
-      createToast(text, color) {
-        const elem = document.createElement("div");
-        elem.className = "toast-" + color;
-        const accent = color === "green" ? "#10b981" : color === "red" ? "#ef4444" : "#2563eb";
-        Object.assign(elem.style, {
-          padding: "9px 18px",
-          backgroundColor: "#14161c",
-          color: "#f3f4f6",
-          border: "1px solid #2b303e",
-          borderLeft: `3px solid ${accent}`,
-          borderRadius: "6px",
-          boxShadow: "0 4px 16px rgba(0,0,0,0.5)",
-          fontSize: "12.5px",
-          fontWeight: "500",
-          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif',
-          lineHeight: "1.4"
-        });
-        elem.textContent = text;
-        return elem;
-      }
-
-      displayToast(elem) {
-        if (this.toasts) {
-          this.toasts.appendChild(elem);
-          setTimeout(() => {
-            if (this.toasts) {
-              this.toasts.removeChild(elem);
-            }
-          }, 3000);
-        }
+        showToast(msg, "info");
       }
     }
 
@@ -414,6 +306,9 @@
       }
       await resolveUserId();
       checkPostReloadState();
+      if (typeof debouncedAssignmentCheck === "function") {
+        debouncedAssignmentCheck();
+      }
     };
 
     if (document.readyState === "loading") {
@@ -432,6 +327,9 @@
       await resolveUserId();
       checkPostReloadState();
       await checkAndCompleteCurrentWidget();
+      if (typeof debouncedAssignmentCheck === "function") {
+        debouncedAssignmentCheck();
+      }
     });
 
     let isWidgetCheckRunning = false;
@@ -2563,8 +2461,53 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     }
 
     /**
+     * Identifies academic integrity declarations, honor code agreements, and certification checkboxes.
+     * STRICT SAFETY & ETHICS: These elements must NEVER be answered, ticked, or auto-submitted.
+     */
+    function isAcademicIntegrityDeclaration(el) {
+      if (!el) return false;
+
+      // 1. Check parent container classes/attributes
+      try {
+        const container = el.closest?.(
+          '.rc-HonorCode, [data-testid*="honor" i], [data-testid*="integrity" i], [data-testid*="attestation" i], [data-testid*="declaration" i], [class*="HonorCode" i], [class*="AcademicIntegrity" i], [class*="Agreement" i], label[class*="honor" i]'
+        );
+        if (container) return true;
+      } catch (_) {}
+
+      // 2. Check text content for honor pledge phrases
+      try {
+        const label = el.closest?.("label") || (el.id ? document.querySelector(`label[for="${el.id}"]`) : null) || el.parentElement;
+        const text = (label?.innerText || label?.textContent || el.innerText || el.textContent || "").toLowerCase();
+
+        const integrityPhrases = [
+          "submitting work that isn’t my own",
+          "submitting work that isn't my own",
+          "permanent failure",
+          "deactivation of my coursera account",
+          "honor code",
+          "academic integrity",
+          "i understand that submitting",
+          "certify that this is my own work",
+          "certify that the answers",
+          "i certify",
+          "own work",
+          "attestation",
+          "honor pledge",
+          "academic dishonesty"
+        ];
+
+        if (integrityPhrases.some(phrase => text.includes(phrase))) {
+          return true;
+        }
+      } catch (_) {}
+
+      return false;
+    }
+
+    /**
      * Finds visible quiz question containers on the page using resilient multi-selectors.
-     * Guarantees 1:1 question isolation and excludes outer submission part wrappers.
+     * Guarantees 1:1 question isolation and excludes outer submission part wrappers and honor code containers.
      */
     function findVisibleQuestionElements() {
       const candidateSelectors = [
@@ -2593,8 +2536,9 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           const elements = Array.from(document.querySelectorAll(selector)).filter(isElementVisible);
           if (elements.length === 0) continue;
 
-          // Filter out containers that are not single question containers
+          // Filter out containers that are not single question containers or are integrity declarations
           const valid = elements.filter(el => {
+            if (isAcademicIntegrityDeclaration(el)) return false;
             const hasChoice = Array.from(el.querySelectorAll('input[type="radio"], input[type="checkbox"]')).some(isOptionInputVisible);
             const hasText = Array.from(el.querySelectorAll('textarea, input[type="text"]')).some(isElementVisible);
             if (!hasChoice && !hasText) return false;
@@ -2671,6 +2615,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     function groupQuestionsByInputs() {
       try {
         const allInputs = Array.from(document.querySelectorAll('input[type="radio"], input[type="checkbox"], textarea, input[type="text"]')).filter(inp => {
+          if (isAcademicIntegrityDeclaration(inp)) return false;
           if (inp.tagName === "TEXTAREA" || inp.type === "text") return isElementVisible(inp);
           return isOptionInputVisible(inp);
         });
@@ -2884,9 +2829,78 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     }
 
     /**
-     * Finds the start/resume assignment button on a quiz or exam overview page.
+     * Determines whether the current page is an eligible assignment page.
+     * Activates ONLY on Practical Assignments, Graded Assignments, and assessment links.
+     * Excludes normal lectures, reading materials, discussions, and coach widgets.
      */
-    function findQuizStartButton() {
+    function isEligibleAssignmentPage() {
+      const pathname = (window.location.pathname || "").toLowerCase();
+
+      // Exclude non-assignment views immediately
+      if (
+        pathname.includes("/lecture/") ||
+        pathname.includes("/reading/") ||
+        pathname.includes("/supplement/") ||
+        pathname.includes("/discussions/") ||
+        pathname.includes("/coach/") ||
+        pathname.includes("/ungradedwidget/") ||
+        pathname.includes("/home")
+      ) {
+        return false;
+      }
+
+      // Check if lecture video or reading item is currently on screen
+      if (document.querySelector('video, .rc-VideoPlayer, div[data-testid="video-player"], .rc-ReadingItem, div[data-testid="reading-content"]')) {
+        return false;
+      }
+
+      // 1. Check Coursera item header pill or type title
+      const pillSelectors = [
+        '[data-testid="item-type-pill"]',
+        '.rc-ItemContentHeader',
+        '[class*="ItemContentHeader" i]',
+        '[data-testid="item-header-title"]',
+        'h1[class*="ItemHeader" i]',
+        '.item-type-pill'
+      ];
+      for (const sel of pillSelectors) {
+        const el = document.querySelector(sel);
+        if (el && isElementVisible(el)) {
+          const txt = (el.innerText || el.textContent || "").toLowerCase();
+          if (/\b(graded assignment|practical assignment|practice assignment|peer-graded assignment|programming assignment|assignment|graded quiz|practice quiz|quiz|exam|assessment)\b/i.test(txt)) {
+            return true;
+          }
+        }
+      }
+
+      // 2. Check if assignment questions are already in DOM
+      if (hasLoadedAssignmentQuestions()) {
+        return true;
+      }
+
+      // 3. Check for assignment start button on landing page
+      if (findAssignmentStartButton()) {
+        return true;
+      }
+
+      // 4. URL pathname structure check
+      if (
+        pathname.includes("/exam/") ||
+        pathname.includes("/quiz/") ||
+        pathname.includes("/assignment-submission/") ||
+        pathname.includes("/assignment/") ||
+        pathname.endsWith("/attempt")
+      ) {
+        return true;
+      }
+
+      return false;
+    }
+
+    /**
+     * Finds the Start / Resume Assignment button on an assignment landing or overview page.
+     */
+    function findAssignmentStartButton() {
       const startButtonSelectors = [
         'button[data-testid="start-assignment-button"]',
         'a[data-testid="start-assignment-button"]',
@@ -2909,7 +2923,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
             if (!isElementVisible(el)) continue;
             const text = (el.innerText || el.textContent || "").trim();
             if (
-              /^(start\s+assignment|start\s+quiz|start|resume\s+assignment|resume\s+quiz|resume|take\s+quiz|begin\s+assignment|begin\s+quiz)$/i.test(text) ||
+              /^(start\s+assignment|start\s+quiz|start\s+attempt|start|resume\s+assignment|resume\s+quiz|resume\s+attempt|resume|take\s+quiz|begin\s+assignment|begin\s+quiz)$/i.test(text) ||
               el.getAttribute("data-testid") === "start-assignment-button" ||
               el.getAttribute("data-testid") === "resume-assignment-button" ||
               el.getAttribute("href")?.endsWith("/attempt")
@@ -2920,12 +2934,12 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         } catch (_) {}
       }
 
-      // Broad button search by text
+      // Broad search by visible button text
       const allButtons = Array.from(document.querySelectorAll("button, a.cds-button"));
       for (const btn of allButtons) {
         if (!isElementVisible(btn)) continue;
         const text = (btn.innerText || btn.textContent || "").trim();
-        if (/^(start\s+assignment|start\s+quiz|start|resume\s+assignment|resume\s+quiz|resume|take\s+quiz|begin\s+assignment|begin\s+quiz)$/i.test(text)) {
+        if (/^(start\s+assignment|start\s+quiz|start\s+attempt|start|resume\s+assignment|resume\s+quiz|resume\s+attempt|resume|take\s+quiz|begin\s+assignment|begin\s+quiz)$/i.test(text)) {
           return btn;
         }
       }
@@ -2933,193 +2947,9 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     }
 
     /**
-     * Handles pre-quiz confirmation modal dialogs (e.g. "Continue", "Start", "Start attempt").
+     * Finds the final submission button on an active assessment page.
      */
-    async function handlePreQuizModals() {
-      const dialogSelectors = [
-        'div[role="dialog"]',
-        'div.rc-Modal',
-        'div.cds-dialog',
-        'div[class*="modal" i]',
-        'div[class*="dialog" i]'
-      ];
-
-      const dialogs = Array.from(document.querySelectorAll(dialogSelectors.join(", ")));
-      for (const dialog of dialogs) {
-        if (!isElementVisible(dialog)) continue;
-        const buttons = Array.from(dialog.querySelectorAll("button, a.cds-button"));
-        for (const btn of buttons) {
-          if (!isElementVisible(btn)) continue;
-          const text = (btn.innerText || btn.textContent || "").trim();
-          if (
-            /^(continue|start|start\s+attempt|resume|proceed|yes|ok)$/i.test(text) ||
-            btn.getAttribute("data-testid")?.includes("continue") ||
-            btn.getAttribute("data-testid")?.includes("start")
-          ) {
-            console.log(`[QUIZ AUTO] Found pre-quiz modal confirmation button "${text}", clicking...`);
-            btn.click();
-            await sleep(800);
-            return true;
-          }
-        }
-      }
-      return false;
-    }
-
-    /**
-     * Waits for quiz questions (radio/checkbox/text inputs) to appear in the DOM.
-     */
-    async function waitForQuizQuestionsToRender(maxWaitMs = 15000) {
-      const startTime = Date.now();
-      while (Date.now() - startTime < maxWaitMs) {
-        // Also check if any pre-quiz modal appeared in the meantime
-        await handlePreQuizModals();
-
-        const inputCount = document.querySelectorAll('input[type="radio"], input[type="checkbox"]').length;
-        if (inputCount > 0) {
-          const domQ = extractQuestionsFromDOM();
-          if (domQ && domQ.length > 0) {
-            return domQ;
-          }
-        }
-        await sleep(500);
-      }
-      return extractQuestionsFromDOM();
-    }
-
-    /**
-     * Automatically initiates the quiz attempt if currently on an overview or landing page.
-     */
-    async function startQuizAttempt() {
-      const currentPath = window.location.pathname;
-      const isAttemptPage = currentPath.endsWith("/attempt") || currentPath.endsWith("attempt");
-      const hasInputs = document.querySelectorAll('input[type="radio"], input[type="checkbox"]').length > 0;
-
-      if (isAttemptPage && hasInputs) {
-        return true; // Already on an active attempt page with questions loaded
-      }
-
-      const startBtn = findQuizStartButton();
-      if (startBtn) {
-        const btnText = (startBtn.innerText || startBtn.textContent || "").trim();
-        console.log(`[QUIZ AUTO] Found start button "${btnText}", initiating quiz...`);
-        showToast(`Initiating quiz (${btnText})...`, "info");
-        notifyQuizProgress("starting", { message: `Initiating quiz (${btnText})...` });
-
-        startBtn.scrollIntoView({ behavior: "smooth", block: "center" });
-        await sleep(300);
-        startBtn.click();
-        await sleep(1000);
-
-        // Handle any confirmation modal dialog ("Continue" / "Start Attempt")
-        await handlePreQuizModals();
-
-        // Wait for attempt page & questions to render
-        notifyQuizProgress("loading_questions", { message: "Waiting for assessment questions to render..." });
-        const questions = await waitForQuizQuestionsToRender(15000);
-        if (questions && questions.length > 0) {
-          return true;
-        }
-      }
-
-      return false;
-    }
-
-    /**
-     * Automatically detects and checks the Honor Code / Academic Integrity checkbox.
-     */
-    async function checkHonorCodeAgreement() {
-      console.log("[QUIZ AUTO] Looking for Honor Code / Academic Integrity agreement checkbox...");
-
-      // Strategy 1: Check known container selectors
-      const containers = Array.from(document.querySelectorAll(
-        '.rc-HonorCode, div[data-testid*="honor" i], div[data-testid*="agreement" i], div[class*="HonorCode" i], div[class*="Agreement" i], label[class*="honor" i]'
-      ));
-
-      for (const c of containers) {
-        const chk = c.querySelector('input[type="checkbox"]') || (c.tagName === "INPUT" && c.type === "checkbox" ? c : null);
-        if (chk) {
-          if (!chk.checked) {
-            chk.scrollIntoView({ behavior: "smooth", block: "center" });
-            await sleep(200);
-            selectChoiceOption(chk);
-            if (!chk.checked) {
-              chk.checked = true;
-              chk.dispatchEvent(new Event("change", { bubbles: true }));
-              chk.dispatchEvent(new Event("input", { bubbles: true }));
-            }
-          }
-          console.log("[QUIZ AUTO] Verified Honor Code checkbox via container selector.");
-          return true;
-        }
-      }
-
-      // Strategy 2: Scan all checkboxes on the page for Honor Code text
-      const allCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
-      for (const chk of allCheckboxes) {
-        const label = chk.closest("label") || chk.parentElement;
-        const text = (label?.innerText || label?.textContent || "").toLowerCase();
-        if (
-          text.includes("submitting work that isn’t my own") ||
-          text.includes("submitting work that isn't my own") ||
-          text.includes("permanent failure") ||
-          text.includes("deactivation of my coursera account") ||
-          text.includes("honor code") ||
-          (text.includes("i understand") && text.includes("own work"))
-        ) {
-          if (!chk.checked) {
-            chk.scrollIntoView({ behavior: "smooth", block: "center" });
-            await sleep(200);
-            selectChoiceOption(chk);
-            if (!chk.checked) {
-              chk.checked = true;
-              chk.dispatchEvent(new Event("change", { bubbles: true }));
-              chk.dispatchEvent(new Event("input", { bubbles: true }));
-            }
-          }
-          console.log("[QUIZ AUTO] Verified Honor Code checkbox via label text.");
-          return true;
-        }
-      }
-
-      return false;
-    }
-
-    /**
-     * Handles post-submit confirmation modals (e.g. "Are you sure you want to submit?").
-     */
-    async function handlePostSubmitConfirmation() {
-      const maxWait = 4000;
-      const startTime = Date.now();
-      while (Date.now() - startTime < maxWait) {
-        const dialogs = Array.from(document.querySelectorAll('div[role="dialog"], div.rc-Modal, div.cds-dialog, div[class*="modal" i]'));
-        for (const dialog of dialogs) {
-          if (!isElementVisible(dialog)) continue;
-          const buttons = Array.from(dialog.querySelectorAll("button, a.cds-button"));
-          for (const btn of buttons) {
-            if (!isElementVisible(btn)) continue;
-            const text = (btn.innerText || btn.textContent || "").trim();
-            if (
-              /^(submit|confirm|yes|proceed|ok)$/i.test(text) ||
-              btn.getAttribute("data-testid")?.includes("submit")
-            ) {
-              console.log(`[QUIZ AUTO] Found post-submit confirmation button "${text}", clicking...`);
-              btn.click();
-              await sleep(600);
-              return true;
-            }
-          }
-        }
-        await sleep(350);
-      }
-      return false;
-    }
-
-    /**
-     * Automatically submits the quiz attempt after answers and Honor Code are set.
-     */
-    async function submitQuizAttempt() {
-      console.log("[QUIZ AUTO] Locating Submit button...");
+    function findSubmitButton() {
       const submitSelectors = [
         'button[data-testid="submit-button"]',
         'button[data-testid="exam-submit-button"]',
@@ -3127,129 +2957,289 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         'button[data-testid*="submit" i]'
       ];
 
-      let submitBtn = null;
       for (const sel of submitSelectors) {
         const btn = document.querySelector(sel);
         if (btn && isElementVisible(btn)) {
-          submitBtn = btn;
-          break;
+          return btn;
         }
       }
 
-      if (!submitBtn) {
-        const allButtons = Array.from(document.querySelectorAll("button"));
-        for (const btn of allButtons) {
-          if (!isElementVisible(btn)) continue;
-          const text = (btn.innerText || btn.textContent || "").trim();
-          if (/^(submit|submit\s+quiz|submit\s+assignment|submit\s+exam)$/i.test(text)) {
-            submitBtn = btn;
-            break;
-          }
+      const allButtons = Array.from(document.querySelectorAll("button, a.cds-button"));
+      for (const btn of allButtons) {
+        if (!isElementVisible(btn)) continue;
+        const text = (btn.innerText || btn.textContent || "").trim();
+        if (/^(submit|submit\s+quiz|submit\s+assignment|submit\s+exam)$/i.test(text)) {
+          return btn;
         }
       }
-
-      if (!submitBtn) {
-        console.warn("[QUIZ AUTO] Could not locate Submit button.");
-        return false;
-      }
-
-      // Scroll to submit button
-      submitBtn.scrollIntoView({ behavior: "smooth", block: "center" });
-      await sleep(400);
-
-      // If submit button is disabled, wait briefly for React validation state to settle
-      if (submitBtn.disabled) {
-        console.log("[QUIZ AUTO] Submit button is currently disabled, waiting up to 3s for state update...");
-        for (let i = 0; i < 6; i++) {
-          await sleep(500);
-          if (!submitBtn.disabled) break;
-        }
-      }
-
-      console.log("[QUIZ AUTO] Clicking Submit button...");
-      submitBtn.click();
-      await sleep(1000);
-
-      // Handle any post-submit confirmation modal
-      await handlePostSubmitConfirmation();
-      return true;
+      return null;
     }
 
+    /**
+     * Determines whether assignment questions have loaded in the DOM.
+     */
+    function hasLoadedAssignmentQuestions() {
+      const qEls = findVisibleQuestionElements();
+      if (qEls && qEls.length > 0) return true;
+
+      const inputCount = document.querySelectorAll('input[type="radio"], input[type="checkbox"]').length;
+      return inputCount > 0;
+    }
+
+    /**
+     * Waits for assignment question DOM elements to render after navigation or initialization.
+     */
+    async function waitForAssignmentQuestionsToLoad(maxWaitMs = 15000) {
+      const startTime = Date.now();
+      while (Date.now() - startTime < maxWaitMs) {
+        if (hasLoadedAssignmentQuestions()) {
+          return true;
+        }
+        await sleep(400);
+      }
+      return hasLoadedAssignmentQuestions();
+    }
+
+    /**
+     * Ensures the Swiss Editorial in-page Auto Solve dock is mounted on the assignment page.
+     */
+    function ensureAutoSolveDockMounted() {
+      let dock = document.getElementById("coursera-auto-solve-dock");
+      const activeModelName = aiSolverInstance ? aiSolverInstance.getActiveModelName() : "Groq • llama-3.3-70b";
+
+      if (!dock) {
+        dock = document.createElement("div");
+        dock.id = "coursera-auto-solve-dock";
+        dock.className = "coursera-auto-solve-dock";
+        dock.innerHTML = `
+          <div class="auto-solve-card">
+            <div class="auto-solve-header">
+              <div class="auto-solve-brand">
+                <span class="auto-solve-dot"></span>
+                <span class="auto-solve-title">Coursera Auto Solver</span>
+              </div>
+              <span id="auto-solve-provider-badge" class="auto-solve-provider-badge" title="Active AI Model">${activeModelName}</span>
+            </div>
+            <button id="coursera-auto-solve-trigger" class="auto-solve-btn" type="button">
+              ⚡ Auto Solve Assignment
+            </button>
+            <div id="auto-solve-status" class="auto-solve-status-bar">Ready to solve</div>
+          </div>
+        `;
+
+        document.body.appendChild(dock);
+
+        const triggerBtn = dock.querySelector("#coursera-auto-solve-trigger");
+        if (triggerBtn) {
+          triggerBtn.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            solveQuiz();
+          });
+        }
+      } else {
+        const badge = dock.querySelector("#auto-solve-provider-badge");
+        if (badge && activeModelName) {
+          badge.textContent = activeModelName;
+        }
+      }
+    }
+
+    /**
+     * Removes the in-page Auto Solve dock when navigating away from an eligible assignment.
+     */
+    function removeAutoSolveDock() {
+      const dock = document.getElementById("coursera-auto-solve-dock");
+      if (dock) {
+        dock.remove();
+      }
+    }
+
+    /**
+     * Updates the status message in the in-page dock.
+     */
+    function updateDockStatus(message, state = "info") {
+      const statusEl = document.getElementById("auto-solve-status");
+      if (statusEl) {
+        statusEl.textContent = message;
+        statusEl.className = "auto-solve-status-bar " + (
+          state === "error" ? "error" :
+          state === "warn" || state === "warning" ? "warn" :
+          state === "success" ? "success" : ""
+        );
+      }
+    }
+
+    let launchedAssignmentPaths = new Set();
+    let isLaunchingAssignment = false;
+
+    /**
+     * Assignment Launch Workflow:
+     * 1. Detect assignment landing page.
+     * 2. Locate Start Assignment button.
+     * 3. Click it automatically.
+     * 4. Wait exactly 4 seconds after navigation or assignment initialization.
+     * 5. Detect whether actual assignment questions have loaded (waits for DOM if still loading).
+     * 6. Display the in-page Auto Solve dock on the opened assignment.
+     * Does NOT repeatedly click Start Assignment or restart an already active attempt.
+     */
+    async function checkAndHandleAssignmentLaunch() {
+      if (isLaunchingAssignment || isSolvingQuiz) return;
+
+      if (!isEligibleAssignmentPage()) {
+        removeAutoSolveDock();
+        return;
+      }
+
+      const currentPath = window.location.pathname;
+
+      // If questions are already active and loaded, mount the dock directly
+      if (hasLoadedAssignmentQuestions()) {
+        ensureAutoSolveDockMounted();
+        return;
+      }
+
+      // If on an assignment landing/overview page with a Start button
+      const startBtn = findAssignmentStartButton();
+      if (startBtn) {
+        if (launchedAssignmentPaths.has(currentPath)) {
+          // Already launched this attempt path once — do not re-trigger
+          ensureAutoSolveDockMounted();
+          return;
+        }
+
+        isLaunchingAssignment = true;
+        launchedAssignmentPaths.add(currentPath);
+
+        try {
+          const btnText = (startBtn.innerText || startBtn.textContent || "").trim();
+          console.log(`[Assignment Workflow] Eligible assignment detected. Auto-launching (${btnText})...`);
+
+          startBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+          await sleep(250);
+          startBtn.click();
+
+          // Wait exactly 4 seconds after navigation / assignment initialization
+          console.log("[Assignment Workflow] Waiting exactly 4 seconds after assignment initialization...");
+          await sleep(4000);
+
+          // Wait for actual assignment questions to render in DOM
+          const questionsLoaded = await waitForAssignmentQuestionsToLoad(15000);
+          console.log(`[Assignment Workflow] Questions loaded: ${questionsLoaded}`);
+
+          // Display the Auto Solve button dock on the opened assignment
+          ensureAutoSolveDockMounted();
+        } catch (err) {
+          console.error("[Assignment Workflow] Error launching assignment:", err);
+        } finally {
+          isLaunchingAssignment = false;
+        }
+      } else {
+        // Active attempt URL without separate landing button
+        if (
+          currentPath.endsWith("/attempt") ||
+          currentPath.includes("/exam/") ||
+          currentPath.includes("/quiz/") ||
+          currentPath.includes("/assignment-submission/")
+        ) {
+          ensureAutoSolveDockMounted();
+        }
+      }
+    }
+
+    let assignmentCheckDebounceTimer = null;
+    function debouncedAssignmentCheck() {
+      if (assignmentCheckDebounceTimer) {
+        clearTimeout(assignmentCheckDebounceTimer);
+      }
+      assignmentCheckDebounceTimer = setTimeout(() => {
+        checkAndHandleAssignmentLaunch();
+      }, 350);
+    }
+
+    /**
+     * Auto Solve Workflow:
+     * 1. Extract questions and answer options from DOM.
+     * 2. Process questions through multi-provider AI failover engine.
+     * 3. Apply suggested answers with green styling indicator.
+     * 4. Support MCQs, multiple-select, true/false, and text answers.
+     * 5. Scroll smoothly through assignment so user can review.
+     * 6. Scroll smoothly to bottom near Submit button.
+     * 7. Show completion status and any unanswered questions.
+     * STRICT SAFETY & ETHICS:
+     * - Never automatically checks honor code / academic integrity checkboxes.
+     * - Never automatically submits graded work. User must personally review and click Submit.
+     */
     async function solveQuiz() {
       if (isSolvingQuiz) return;
       isSolvingQuiz = true;
 
-      notifyQuizProgress("starting", { message: "Preparing multi-provider AI reasoning engine..." });
+      const triggerBtn = document.getElementById("coursera-auto-solve-trigger");
+      if (triggerBtn) {
+        triggerBtn.disabled = true;
+        triggerBtn.textContent = "Solving Assignment...";
+      }
+
+      updateDockStatus("Preparing AI reasoning engine...", "info");
+      notifyQuizProgress("starting", { message: "Preparing AI reasoning engine..." });
 
       try {
         if (!aiSolverInstance.hasConfiguredProvider()) {
           const keyMsg = "AI API key required. Please configure Groq, Cerebras, OpenRouter, or Gemini in extension settings.";
-          showToast(keyMsg, "error");
+          updateDockStatus(keyMsg, "error");
           notifyQuizProgress("error", { message: keyMsg });
           return;
         }
 
-        // STEP 0: If on an exam/quiz overview page, automatically start the quiz and handle pre-quiz modals
-        const started = await startQuizAttempt();
-        if (started) {
-          await sleep(1000);
-        }
+        updateDockStatus("Extracting assignment questions...", "info");
+        notifyQuizProgress("loading_questions", { message: "Extracting assignment questions..." });
 
-        notifyQuizProgress("loading_questions", { message: "Reading question draft from Coursera..." });
-
-        // If not already captured via network interception, extract from DOM (with retry)
-        if (!questionsJson) {
-          let domExtracted = extractQuestionsFromDOM();
-          if (!domExtracted || domExtracted.length === 0) {
-            // Wait briefly and retry in case page is still rendering
-            for (let r = 0; r < 3; r++) {
-              await sleep(600);
-              domExtracted = extractQuestionsFromDOM();
-              if (domExtracted && domExtracted.length > 0) break;
-            }
-          }
-          if (domExtracted && domExtracted.length > 0) {
-            questionsJson = JSON.stringify(domExtracted, null, 2);
-            console.log("Extracted Quiz Questions from DOM (Sanitized):\n", questionsJson);
+        // Extract questions from DOM with retries if still rendering
+        let domExtracted = extractQuestionsFromDOM();
+        if (!domExtracted || domExtracted.length === 0) {
+          for (let r = 0; r < 3; r++) {
+            await sleep(600);
+            domExtracted = extractQuestionsFromDOM();
+            if (domExtracted && domExtracted.length > 0) break;
           }
         }
 
-        // If still no questions, check if user is on an embedded widget, coach, or ungraded page
-        if (!questionsJson) {
+        let parsedQuestions = domExtracted;
+        if ((!parsedQuestions || parsedQuestions.length === 0) && questionsJson) {
+          try {
+            parsedQuestions = JSON.parse(questionsJson);
+          } catch (_) {}
+        }
+
+        // Check embedded coach widget fallback
+        if (!parsedQuestions || parsedQuestions.length === 0) {
           const currentUrl = window.location.href;
-          if (currentUrl.includes("/coach/") || currentUrl.includes("/ungradedWidget/")) {
-            showToast("Detected Coach Dialogue / Ungraded Widget. Solving widget...", "info");
+          if (currentUrl.includes("/coach/") || currentUrl.includes("/ungradedwidget/")) {
+            updateDockStatus("Solving dialogue / widget...", "info");
             if (currentUrl.includes("/coach/")) {
               await runCoachDialogueAutomator();
             } else {
               await checkAndCompleteCurrentWidget();
             }
+            updateDockStatus("✓ Dialogue / widget completed", "success");
             notifyQuizProgress("completed", { message: "✓ Dialogue / widget completed successfully" });
             return;
           }
 
-          const noQMsg = "No quiz questions found. Open an active quiz attempt page to solve.";
-          showToast(noQMsg, "error");
+          const noQMsg = "No assignment questions found on this page.";
+          updateDockStatus(noQMsg, "error");
           notifyQuizProgress("error", { message: noQMsg });
           return;
         }
 
-        let parsedQuestions = [];
-        try {
-          parsedQuestions = JSON.parse(questionsJson);
-        } catch (_) {}
-        const totalCount = Array.isArray(parsedQuestions) ? parsedQuestions.length : 0;
-
-        notifyQuizProgress("questions_ready", {
+        const totalCount = parsedQuestions.length;
+        updateDockStatus(`Discovered ${totalCount} questions. Consulting AI...`, "info");
+        notifyQuizProgress("solving", {
           total: totalCount,
           message: `Discovered ${totalCount} question${totalCount === 1 ? '' : 's'} to solve.`
         });
 
-        notifyQuizProgress("solving", {
-          total: totalCount,
-          message: "Sending questions to AI provider failover engine..."
-        });
-
+        // 2. Process questions through multi-provider AI failover engine
         const solveResult = await aiSolverInstance.solveQuestions(parsedQuestions, (progress) => {
           notifyQuizProgress("solving", {
             total: totalCount,
@@ -3257,7 +3247,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
             model: `${progress.providerName} • ${progress.model}`
           });
           if (progress.message) {
-            showToast(progress.message, "info");
+            updateDockStatus(progress.message, "info");
           }
         });
 
@@ -3268,20 +3258,16 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
 
         console.log(`[AI Solver] Answers from ${providerUsed} (${modelUsed}):`, answers);
 
-        notifyQuizProgress("answers_ready", {
-          total: totalCount,
-          message: `Answers verified by ${providerUsed}. Ready to apply.`,
-          model: `${providerUsed} • ${modelUsed}`
-        });
-
+        // 3. Apply suggested answers to DOM
+        updateDockStatus(`Applying answers via ${providerUsed}...`, "info");
         notifyQuizProgress("filling_answers", {
           current: 0,
           total: totalCount,
-          message: `Applying answers to quiz options (${providerUsed})...`,
+          message: `Applying answers (${providerUsed})...`,
           model: `${providerUsed} • ${modelUsed}`
         });
 
-        const fillSuccess = fillQuizAnswersInDOM(answers, (curr, tot) => {
+        const fillResult = fillQuizAnswersInDOM(answers, (curr, tot) => {
           notifyQuizProgress("filling_answers", {
             current: curr,
             total: tot,
@@ -3290,53 +3276,75 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           });
         });
 
-        if (fillSuccess === false) {
-          const noDomMsg = "Could not locate question elements on this page.";
-          showToast(noDomMsg, "error");
+        if (fillResult === false) {
+          const noDomMsg = "Could not locate question elements to select answers.";
+          updateDockStatus(noDomMsg, "error");
           notifyQuizProgress("error", { message: noDomMsg });
           return;
         }
 
-        // STEP 4: Agree to Honor Code / Academic Integrity Checkbox
-        notifyQuizProgress("submitting", {
-          current: totalCount,
-          total: totalCount,
-          message: "Verifying Honor Code agreement...",
-          model: `${providerUsed} • ${modelUsed}`
-        });
-        await checkHonorCodeAgreement();
-        await sleep(500);
+        // 5. Scroll smoothly through the assignment so user can review questions & suggested answers
+        updateDockStatus("Reviewing questions...", "info");
+        const questionElements = findVisibleQuestionElements();
+        for (let i = 0; i < questionElements.length; i++) {
+          const qEl = questionElements[i];
+          try {
+            qEl.scrollIntoView({ behavior: "smooth", block: "center" });
+            await sleep(350);
+          } catch (_) {}
+        }
 
-        // STEP 5: Automatically submit the quiz and confirm modal
-        notifyQuizProgress("submitting", {
-          current: totalCount,
-          total: totalCount,
-          message: "Submitting quiz attempt...",
-          model: `${providerUsed} • ${modelUsed}`
-        });
-        const submitted = await submitQuizAttempt();
-        const successMsg = submitted
-          ? `✓ Quiz solved and submitted via ${providerUsed} (${modelUsed})${isCached ? ' [cached]' : ''}!`
-          : `✓ Answers applied via ${providerUsed} (${modelUsed})${isCached ? ' [cached]' : ''}! Please review and submit.`;
-        showToast(successMsg, submitted ? "success" : "info");
+        // Scroll smoothly to bottom near final submission button
+        const submitBtn = findSubmitButton();
+        if (submitBtn) {
+          try {
+            submitBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+          } catch (_) {}
+        } else {
+          window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+        }
+        await sleep(400);
 
-        // Actual completion confirmation
+        // 7. Show completion status and any unanswered questions
+        let answeredCount = 0;
+        questionElements.forEach((qEl) => {
+          const hasChecked = qEl.querySelector('input[type="radio"]:checked, input[type="checkbox"]:checked');
+          const textInput = qEl.querySelector('textarea, input[type="text"]');
+          if (hasChecked || (textInput && textInput.value.trim().length > 0)) {
+            answeredCount++;
+          }
+        });
+
+        const finalTotal = questionElements.length || totalCount;
+        const unansweredCount = Math.max(0, finalTotal - answeredCount);
+
+        let summaryMsg = "";
+        if (unansweredCount === 0) {
+          summaryMsg = `✓ All ${finalTotal} questions filled via ${providerUsed}${isCached ? ' [cached]' : ''}. Please review honor pledge & submit.`;
+          updateDockStatus(summaryMsg, "success");
+        } else {
+          summaryMsg = `⚠️ ${answeredCount} of ${finalTotal} questions filled (${unansweredCount} unanswered). Please review before submitting.`;
+          updateDockStatus(summaryMsg, "warn");
+        }
+
         notifyQuizProgress("completed", {
-          current: totalCount,
-          total: totalCount,
-          message: submitted
-            ? `✓ Quiz solved and submitted (${providerUsed})`
-            : `✓ Quiz answers applied (${providerUsed})`,
+          current: answeredCount,
+          total: finalTotal,
+          message: summaryMsg,
           model: `${providerUsed} • ${modelUsed}`
         });
       } catch (error) {
-        console.error("Error in solveQuestions:", error);
-        let cleanMsg = error.message || "Quiz could not be completed.";
+        console.error("Error in solveQuiz:", error);
+        let cleanMsg = error.message || "Assignment could not be completed.";
         cleanMsg = aiSolverInstance.maskAllApiKeys(cleanMsg);
-        showToast(`Unable to complete quiz: ${cleanMsg}`, "error");
+        updateDockStatus(`Error: ${cleanMsg}`, "error");
         notifyQuizProgress("error", { message: cleanMsg });
       } finally {
         isSolvingQuiz = false;
+        if (triggerBtn) {
+          triggerBtn.disabled = false;
+          triggerBtn.textContent = "⚡ Auto Solve Assignment";
+        }
       }
     }
 
@@ -3604,6 +3612,12 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         const normalized = normalizeQuizAnswer(answer, visibleOptions.length);
 
         visibleOptions.forEach((optInput, optIdx) => {
+          // STRICT SAFETY & ETHICS: Never select academic integrity declarations or honor pledges
+          if (isAcademicIntegrityDeclaration(optInput)) {
+            console.log("[Academic Integrity] Skipped honor code declaration checkbox.");
+            return;
+          }
+
           let isMatch = normalized.indices.includes(optIdx);
 
           // Text-based fallback matching if index didn't match
@@ -3632,6 +3646,14 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
             if (isMatch) {
               selectChoiceOption(optInput);
               totalMarkedCount++;
+            }
+          }
+
+          // Visual indication on AI suggested choice in Coursera DOM
+          if (isMatch) {
+            const choiceBox = optInput.closest("label") || optInput.parentElement;
+            if (choiceBox) {
+              choiceBox.classList.add("coursera-suggested-choice");
             }
           }
         });
@@ -3713,17 +3735,6 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         return true;
       }
 
-      // Auto-quiz message from background.js navigation listener
-      if (actionName === "attempt") {
-        (async () => {
-          if (autoQuizEnabled && geminiApiKey) {
-            await solveQuiz();
-          }
-          sendResponse({ received: true });
-        })();
-        return true;
-      }
-
       // User profile request from popup
       if (actionName === "GET_USER_DATA") {
         const user = extractUserData();
@@ -3761,11 +3772,52 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       if (request.message === "urlChanged") {
         cachedCourseMaterials = null;
         checkAndCompleteCurrentWidget().catch(() => {});
+        if (typeof debouncedAssignmentCheck === "function") {
+          debouncedAssignmentCheck();
+        }
         sendResponse({ updated: true });
         return true;
       }
 
       return undefined;
     });
+
+    // -------------------------------------------------------------
+    // SPA Lifecycle & MutationObserver Initialization
+    // -------------------------------------------------------------
+    if (typeof MutationObserver !== "undefined") {
+      const pageObserver = new MutationObserver(() => {
+        if (typeof debouncedAssignmentCheck === "function") {
+          debouncedAssignmentCheck();
+        }
+      });
+      if (document.body) {
+        pageObserver.observe(document.body, { childList: true, subtree: true });
+      } else {
+        document.addEventListener("DOMContentLoaded", () => {
+          if (document.body) {
+            pageObserver.observe(document.body, { childList: true, subtree: true });
+          }
+        });
+      }
+    }
+
+    if (typeof window !== "undefined") {
+      window.addEventListener("popstate", () => {
+        if (typeof debouncedAssignmentCheck === "function") {
+          debouncedAssignmentCheck();
+        }
+      });
+      window.addEventListener("hashchange", () => {
+        if (typeof debouncedAssignmentCheck === "function") {
+          debouncedAssignmentCheck();
+        }
+      });
+    }
+
+    // Initial check after content script injection
+    if (typeof debouncedAssignmentCheck === "function") {
+      debouncedAssignmentCheck();
+    }
   })();
 })();
