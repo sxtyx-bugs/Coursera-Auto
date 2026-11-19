@@ -2657,6 +2657,11 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
      * Finds visible quiz question containers on the page using resilient multi-selectors.
      * Guarantees 1:1 question isolation and excludes outer submission part wrappers and honor code containers.
      */
+    /**
+     * Finds all visible, genuine question containers on the page.
+     * Evaluates multiple container patterns without discarding mixed question formats
+     * (e.g. single-choice <fieldset> alongside multi-select <div> containers).
+     */
     function findVisibleQuestionElements() {
       const candidateSelectors = [
         'div[data-testid="question-item"]',
@@ -2668,7 +2673,6 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         'fieldset[aria-label*="Question" i]',
         'fieldset',
         'div[role="group"][aria-label*="Question" i]',
-        'div[role="group"]',
         'div.rc-FormPart',
         'div[class*="rc-FormPart"]',
         'div.c-question',
@@ -2679,45 +2683,95 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         'div.css-1tfphom'
       ];
 
-      for (const selector of candidateSelectors) {
+      // Query across all candidate selectors simultaneously
+      const allFound = [];
+      for (const sel of candidateSelectors) {
         try {
-          const elements = Array.from(document.querySelectorAll(selector)).filter(isElementVisible);
-          if (elements.length === 0) continue;
-
-          // Filter out containers that are not single question containers or are integrity declarations
-          const valid = elements.filter(el => {
-            if (isAcademicIntegrityDeclaration(el)) return false;
-            const hasChoice = Array.from(el.querySelectorAll('input[type="radio"], input[type="checkbox"]')).some(isOptionInputVisible);
-            const hasText = Array.from(el.querySelectorAll('textarea, input[type="text"]')).some(isElementVisible);
-            if (!hasChoice && !hasText) return false;
-
-            // An individual question container should NOT span multiple distinct radio groups
-            const radioNames = new Set(
-              Array.from(el.querySelectorAll('input[type="radio"]'))
-                .filter(isOptionInputVisible)
-                .map(r => r.name)
-                .filter(Boolean)
-            );
-            if (radioNames.size > 1) {
-              return false;
-            }
-
-            return true;
+          const els = Array.from(document.querySelectorAll(sel)).filter(isElementVisible);
+          els.forEach(el => {
+            if (!allFound.includes(el)) allFound.push(el);
           });
-
-          // Filter out any container that contains another valid container (keep innermost/leaf containers)
-          const leafElements = valid.filter(el => {
-            return !valid.some(other => other !== el && el.contains(other));
-          });
-
-          if (leafElements.length > 0) {
-            return leafElements;
-          }
         } catch (_) {}
       }
 
-      // Fallback: Group questions directly from visible inputs
-      return groupQuestionsByInputs();
+      // Filter to containers that actually hold question inputs and are not integrity declarations
+      const validContainers = allFound.filter(el => {
+        if (isAcademicIntegrityDeclaration(el)) return false;
+        const hasChoice = Array.from(el.querySelectorAll('input[type="radio"], input[type="checkbox"], [role="radio"], [role="checkbox"]'))
+          .some(inp => isOptionInputVisible(inp) && !isAcademicIntegrityDeclaration(inp));
+        const hasText = Array.from(el.querySelectorAll('textarea, input[type="text"]')).some(isElementVisible);
+        if (!hasChoice && !hasText) return false;
+
+        // Container should not span multiple distinct radio groups
+        const radioNames = new Set(
+          Array.from(el.querySelectorAll('input[type="radio"]'))
+            .filter(isOptionInputVisible)
+            .map(r => r.name)
+            .filter(Boolean)
+        );
+        if (radioNames.size > 1) return false;
+
+        return true;
+      });
+
+      // Keep innermost / leaf containers (container must not contain another candidate container)
+      let questionContainers = validContainers.filter(el => {
+        return !validContainers.some(other => other !== el && el.contains(other));
+      });
+
+      // Verify that all visible choice inputs are accounted for
+      const allChoiceInputs = Array.from(document.querySelectorAll('input[type="radio"], input[type="checkbox"], textarea, input[type="text"]'))
+        .filter(inp => {
+          if (isAcademicIntegrityDeclaration(inp)) return false;
+          if (inp.tagName === "TEXTAREA" || inp.type === "text") return isElementVisible(inp);
+          return isOptionInputVisible(inp);
+        });
+
+      const unassignedInputs = allChoiceInputs.filter(inp => {
+        return !questionContainers.some(c => c.contains(inp));
+      });
+
+      if (unassignedInputs.length > 0) {
+        const fallbackGrouped = groupQuestionsByInputs(unassignedInputs);
+        fallbackGrouped.forEach(c => {
+          if (!questionContainers.includes(c)) questionContainers.push(c);
+        });
+      }
+
+      if (questionContainers.length === 0) {
+        questionContainers = groupQuestionsByInputs(allChoiceInputs);
+      }
+
+      // Sort question containers strictly by visual DOM document position
+      questionContainers.sort((a, b) => {
+        try {
+          return (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) ? -1 : 1;
+        } catch (_) {
+          return 0;
+        }
+      });
+
+      return questionContainers;
+    }
+
+    /**
+     * Finds all visible, interactive choice inputs (radio buttons, checkboxes, custom ARIA)
+     * belonging to a specific question container.
+     */
+    function findQuestionOptionInputs(questionEl) {
+      if (!questionEl) return [];
+
+      const nativeInputs = Array.from(questionEl.querySelectorAll('input[type="radio"], input[type="checkbox"]'))
+        .filter(inp => isOptionInputVisible(inp) && !isAcademicIntegrityDeclaration(inp));
+
+      if (nativeInputs.length > 0) {
+        return nativeInputs;
+      }
+
+      const ariaInputs = Array.from(questionEl.querySelectorAll('[role="radio"], [role="checkbox"]'))
+        .filter(el => isElementVisible(el) && !isAcademicIntegrityDeclaration(el));
+
+      return ariaInputs;
     }
 
     /**
@@ -2888,15 +2942,18 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         if (!questionElements || questionElements.length === 0) return null;
 
         const extracted = [];
-        questionElements.forEach((qEl) => {
+        questionElements.forEach((qEl, idx) => {
           // Find all VISIBLE choice inputs (handling CDS styled opacity: 0 inputs)
-          const allInputs = Array.from(qEl.querySelectorAll('input[type="radio"], input[type="checkbox"]'));
-          const visibleInputs = allInputs.filter(isOptionInputVisible);
+          const visibleInputs = findQuestionOptionInputs(qEl);
+          const hasCheckbox = visibleInputs.some(inp => inp.type === "checkbox" || inp.getAttribute("role") === "checkbox");
           const isMcq = visibleInputs.length > 0;
+          const qType = !isMcq ? "text" : (hasCheckbox ? "multiple-select" : "mcq");
           const options = [];
 
           visibleInputs.forEach((inp) => {
-            const label = inp.closest("label") || inp.parentElement;
+            const label = inp.closest("label") ||
+                          (inp.id ? document.querySelector(`label[for="${inp.id}"]`) : null) ||
+                          inp.parentElement;
             if (label) {
               const optText = getCleanVisibleText(label);
               // Drop honeypot options
@@ -2923,7 +2980,9 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           }
 
           extracted.push({
-            type: isMcq ? "mcq" : "text",
+            index: idx,
+            type: qType,
+            isMultipleSelect: hasCheckbox,
             options: options,
             question: promptText
           });
@@ -3406,7 +3465,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
 
         console.log(`[AI Solver] Answers from ${providerUsed} (${modelUsed}):`, answers);
 
-        // 3. Apply suggested answers to DOM
+        // 3. Process each question sequentially with smooth scrolling, pacing & visual verification
         updateDockStatus(`Applying answers via ${providerUsed}...`, "info");
         notifyQuizProgress("filling_answers", {
           current: 0,
@@ -3415,13 +3474,14 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           model: `${providerUsed} • ${modelUsed}`
         });
 
-        const fillResult = fillQuizAnswersInDOM(answers, (curr, tot) => {
+        const fillResult = await fillQuizAnswersInDOM(answers, (curr, tot, detail) => {
           notifyQuizProgress("filling_answers", {
             current: curr,
             total: tot,
-            message: `Applying answer ${curr} of ${tot}...`,
+            message: `Reviewed Question ${curr} of ${tot} (${detail.markedCount} option${detail.markedCount === 1 ? '' : 's'} marked)...`,
             model: `${providerUsed} • ${modelUsed}`
           });
+          updateDockStatus(`Question ${curr}/${tot}: ${detail.markedCount} option(s) verified`, "info");
         });
 
         if (fillResult === false) {
@@ -3431,20 +3491,15 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           return;
         }
 
-        // 5. Scroll smoothly through the assignment so user can review questions & suggested answers
-        updateDockStatus("Reviewing questions...", "info");
-        const questionElements = findVisibleQuestionElements();
-        for (let i = 0; i < questionElements.length; i++) {
-          const qEl = questionElements[i];
-          try {
-            qEl.scrollIntoView({ behavior: "smooth", block: "center" });
-            await sleep(350);
-          } catch (_) {}
-        }
-
-        // Scroll smoothly to bottom near final submission button
+        // 4. Safe final review navigation: smoothly scroll to the submission / honor code section
+        updateDockStatus("Navigating to final submission review...", "info");
+        const honorSection = document.querySelector('.rc-HonorCode, [data-testid*="honor" i], [data-testid*="integrity" i], [class*="HonorCode" i]');
         const submitBtn = findSubmitButton();
-        if (submitBtn) {
+        if (honorSection) {
+          try {
+            honorSection.scrollIntoView({ behavior: "smooth", block: "center" });
+          } catch (_) {}
+        } else if (submitBtn) {
           try {
             submitBtn.scrollIntoView({ behavior: "smooth", block: "center" });
           } catch (_) {}
@@ -3453,25 +3508,39 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         }
         await sleep(400);
 
-        // 7. Show completion status and any unanswered questions
+        // 5. Final review audit: separate required questions from academic integrity declaration
+        const questionElements = findVisibleQuestionElements();
         let answeredCount = 0;
-        questionElements.forEach((qEl) => {
-          const hasChecked = qEl.querySelector('input[type="radio"]:checked, input[type="checkbox"]:checked');
+        const unansweredQuestions = [];
+        const uncertainQuestions = [];
+
+        questionElements.forEach((qEl, idx) => {
+          const qNum = idx + 1;
+          const hasChecked = qEl.querySelector('input[type="radio"]:checked, input[type="checkbox"]:checked, [role="radio"][aria-checked="true"], [role="checkbox"][aria-checked="true"]');
           const textInput = qEl.querySelector('textarea, input[type="text"]');
-          if (hasChecked || (textInput && textInput.value.trim().length > 0)) {
+          const hasText = textInput && textInput.value.trim().length > 0;
+
+          if (hasChecked || hasText) {
             answeredCount++;
+          } else {
+            unansweredQuestions.push(qNum);
+          }
+
+          const ans = answers[idx];
+          if (ans && ans.confidence && ans.confidence < 0.7) {
+            uncertainQuestions.push(qNum);
           }
         });
 
         const finalTotal = questionElements.length || totalCount;
-        const unansweredCount = Math.max(0, finalTotal - answeredCount);
+        const unansweredCount = unansweredQuestions.length;
 
         let summaryMsg = "";
         if (unansweredCount === 0) {
-          summaryMsg = `✓ All ${finalTotal} questions filled via ${providerUsed}${isCached ? ' [cached]' : ''}. Please review honor pledge & submit.`;
+          summaryMsg = `✓ All ${finalTotal} questions filled & verified. Honor Code preserved unticked. Please review & submit manually.`;
           updateDockStatus(summaryMsg, "success");
         } else {
-          summaryMsg = `⚠️ ${answeredCount} of ${finalTotal} questions filled (${unansweredCount} unanswered). Please review before submitting.`;
+          summaryMsg = `⚠️ ${answeredCount} of ${finalTotal} questions filled. Question(s) ${unansweredQuestions.join(", ")} need review before submitting.`;
           updateDockStatus(summaryMsg, "warn");
         }
 
@@ -3497,114 +3566,192 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     }
 
     /**
-     * Programmatically checks a radio or checkbox option in Coursera's React DOM.
-     * Prevents double-clicking and guarantees React state synchronization.
+     * Programmatically sets the checked state of a checkbox or radio button.
+     * Guarantees persistence in Coursera's React component state:
+     * 1. Checks current state first to prevent unchecking already-checked options.
+     * 2. Dispatches human-like pointerdown/mousedown/pointerup/mouseup/click events to the label.
+     * 3. Dispatches events to the input if needed.
+     * 4. Updates React internal _valueTracker to bypass React controlled input suppression.
+     * 5. Verifies resulting DOM checked state.
      */
-    function selectChoiceOption(optInput) {
-      if (!optInput) return;
-      const label = optInput.closest("label") || (optInput.id ? document.querySelector(`label[for="${optInput.id}"]`) : null);
-      const targetToScroll = label || optInput;
+    async function setInputChecked(input, shouldBeChecked) {
+      if (!input) return false;
 
+      // STRICT SAFETY: Never touch academic integrity declarations
+      if (isAcademicIntegrityDeclaration(input)) {
+        console.log("[Academic Integrity] Preserved honor pledge declaration unticked.");
+        return false;
+      }
+
+      const currentlyChecked = Boolean(
+        input.checked ||
+        input.getAttribute("aria-checked") === "true" ||
+        input.classList?.contains("selected") ||
+        input.classList?.contains("checked")
+      );
+
+      // If already in the target state, do NOT click (prevents unchecking!)
+      if (currentlyChecked === shouldBeChecked) {
+        return true;
+      }
+
+      const label = input.closest("label") ||
+                    (input.id ? document.querySelector(`label[for="${input.id}"]`) : null) ||
+                    input.parentElement;
+
+      // Focus
+      try { input.focus(); } catch (_) {}
+
+      // Method 1: Dispatch complete mouse & pointer events to the clickable label/container
+      const target = label || input;
       try {
-        targetToScroll.scrollIntoView({ block: "nearest", inline: "nearest" });
+        target.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, view: window }));
+        target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+        target.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, view: window }));
+        target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+        target.click();
       } catch (_) {}
 
-      // 1. If wrapped by label, click the label (standard user interaction)
-      if (label) {
-        try {
-          label.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
-          label.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
-          label.click();
-        } catch (_) {}
+      await sleep(35);
+
+      let updatedChecked = Boolean(input.checked || input.getAttribute("aria-checked") === "true");
+      if (updatedChecked === shouldBeChecked) {
+        return true;
       }
 
-      // 2. If not checked after label click (or no label), click the input directly
-      if (!optInput.checked) {
-        try {
-          optInput.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
-          optInput.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
-          optInput.click();
-        } catch (_) {}
+      // Method 2: Click the input element directly
+      try {
+        input.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, view: window }));
+        input.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+        input.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, view: window }));
+        input.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+        input.click();
+      } catch (_) {}
+
+      await sleep(35);
+      updatedChecked = Boolean(input.checked || input.getAttribute("aria-checked") === "true");
+      if (updatedChecked === shouldBeChecked) {
+        return true;
       }
 
-      // 3. Fallback: if STILL not checked (e.g. pointer-events: none or styled overlay)
-      if (!optInput.checked) {
-        try {
-          const proto = window.HTMLInputElement.prototype;
-          const nativeCheckedSetter = Object.getOwnPropertyDescriptor(proto, "checked")?.set;
-          if (nativeCheckedSetter) {
-            nativeCheckedSetter.call(optInput, true);
-          } else {
-            optInput.checked = true;
-          }
-        } catch (_) {
-          optInput.checked = true;
+      // Method 3: React Controlled Input value-tracker setter override
+      try {
+        const proto = window.HTMLInputElement.prototype;
+        const nativeSetter = Object.getOwnPropertyDescriptor(proto, "checked")?.set;
+        if (nativeSetter) {
+          nativeSetter.call(input, shouldBeChecked);
+        } else {
+          input.checked = shouldBeChecked;
         }
+
+        if (input._valueTracker) {
+          input._valueTracker.setValue(!shouldBeChecked);
+        }
+
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      } catch (_) {
+        input.checked = shouldBeChecked;
       }
 
-      // 4. Always notify React synthetic event system
-      try {
-        optInput.dispatchEvent(new Event("input", { bubbles: true }));
-        optInput.dispatchEvent(new Event("change", { bubbles: true }));
-      } catch (_) {}
+      // Custom ARIA roles
+      if (input.getAttribute("role") === "checkbox" || label?.getAttribute("role") === "checkbox") {
+        const roleEl = input.getAttribute("role") === "checkbox" ? input : label;
+        roleEl.setAttribute("aria-checked", String(shouldBeChecked));
+      }
+
+      await sleep(25);
+      return Boolean(input.checked || input.getAttribute("aria-checked") === "true") === shouldBeChecked;
     }
 
     /**
-     * Programmatically unchecks an already-selected checkbox option if it is not a correct answer.
+     * Matches a question option input and its visible text against normalized AI answers.
+     * Evaluates multi-factor signals:
+     * - Explicit Option Index
+     * - Option Letter Prefix (e.g. "A. Dedicated function", "B) Real-time") or sequential letter
+     * - Exact and Fuzzy text matching (normalizing nested HTML, whitespace, and punctuation)
+     * - Token overlap similarity for long sentence options
      */
-    function uncheckChoiceOption(optInput) {
-      if (!optInput || !optInput.checked) return;
-      const label = optInput.closest("label") || (optInput.id ? document.querySelector(`label[for="${optInput.id}"]`) : null);
-
-      if (label) {
-        try {
-          label.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
-          label.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
-          label.click();
-        } catch (_) {}
+    function matchOptionToAnswer(optInput, optIdx, optCleanText, normalized, totalOptions) {
+      if (isAcademicIntegrityDeclaration(optInput)) {
+        return false;
       }
 
-      if (optInput.checked) {
-        try {
-          optInput.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
-          optInput.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
-          optInput.click();
-        } catch (_) {}
+      // 1. Explicit Index match
+      if (normalized.indices.includes(optIdx)) {
+        return true;
       }
 
-      if (optInput.checked) {
-        try {
-          const proto = window.HTMLInputElement.prototype;
-          const nativeCheckedSetter = Object.getOwnPropertyDescriptor(proto, "checked")?.set;
-          if (nativeCheckedSetter) {
-            nativeCheckedSetter.call(optInput, false);
-          } else {
-            optInput.checked = false;
+      // 2. Explicit Letter match
+      const optLetterPrefix = optCleanText.match(/^(?:option\s+)?\(?([A-Z])[\.\)\:\s]/i);
+      const optLetter = optLetterPrefix
+        ? optLetterPrefix[1].toUpperCase()
+        : String.fromCharCode(65 + optIdx);
+
+      if (normalized.letters.includes(optLetter)) {
+        return true;
+      }
+
+      // 3. Text-based match (Exact and Fuzzy with nested HTML cleanup)
+      if (normalized.texts.length > 0 && optCleanText) {
+        const normOpt = optCleanText.toLowerCase()
+          .replace(/^(?:option\s+)?\(?[a-z][\.\)\:\s]\s*/i, "")
+          .replace(/[^\w\s]/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+
+        for (const ct of normalized.texts) {
+          if (typeof ct !== "string") continue;
+          const normCt = ct.trim().toLowerCase()
+            .replace(/^(?:option\s+)?\(?[a-z][\.\)\:\s]\s*/i, "")
+            .replace(/[^\w\s]/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+
+          if (!normOpt || !normCt) continue;
+
+          // Exact match
+          if (normOpt === normCt) return true;
+
+          // Substring match
+          if (normCt.length >= 6 && normOpt.includes(normCt)) return true;
+          if (normOpt.length >= 6 && normCt.includes(normOpt)) return true;
+
+          // Short answer keywords (e.g. "true", "false", "yes", "no")
+          if ((normCt === "true" || normCt === "false" || normCt === "yes" || normCt === "no") && normOpt === normCt) {
+            return true;
           }
-        } catch (_) {
-          optInput.checked = false;
+
+          // Significant token overlap for long sentences with nested tags
+          const optTokens = normOpt.split(" ").filter(w => w.length > 3);
+          const ctTokens = normCt.split(" ").filter(w => w.length > 3);
+          if (optTokens.length >= 3 && ctTokens.length >= 3) {
+            const common = optTokens.filter(t => ctTokens.includes(t));
+            const overlapRatio = common.length / Math.min(optTokens.length, ctTokens.length);
+            if (overlapRatio >= 0.75) {
+              return true;
+            }
+          }
         }
       }
 
-      try {
-        optInput.dispatchEvent(new Event("input", { bubbles: true }));
-        optInput.dispatchEvent(new Event("change", { bubbles: true }));
-      } catch (_) {}
+      return false;
     }
 
     /**
-     * Normalizes heterogeneous multi-provider answer formats into standard indices, texts, and content.
+     * Normalizes heterogeneous multi-provider answer formats into standard indices, texts, letters, and content.
      * Supports:
      * - Multi-provider standardized output: { "question_type": "...", "answers": ["B"] }
-     * - Multi-select output: { "answers": ["A", "C"] }
+     * - Multi-select output: { "answers": ["A", "C"] } or { "answers": ["A, C"] }
      * - Free-response / fill-in-the-blank: { "answers": ["microcontroller"] }
-     * - Legacy Gemini output: { "correctOptionsIndex": [1], "correctOptions": ["..."] }
+     * - Legacy Gemini output: { "correctOptionsIndex": [0, 2], "correctOptions": ["..."] }
      */
     function normalizeQuizAnswer(answer, totalOptionsCount) {
-      if (!answer) return { indices: [], texts: [], content: "" };
+      if (!answer) return { indices: [], texts: [], letters: [], content: "" };
 
       let indices = [];
       let texts = [];
+      let letters = [];
       let content = "";
 
       // 1. Standard multi-provider format: answers: ["B"] or answers: ["Microcontroller"]
@@ -3612,33 +3759,57 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         ? answer.answers
         : (Array.isArray(answer.answer) ? answer.answer : null);
 
-      if (rawAnswers) {
-        rawAnswers.forEach(item => {
-          if (typeof item === "number") {
-            const num = parseInt(item, 10);
-            if (!isNaN(num) && num >= 0) indices.push(num);
-          } else if (typeof item === "string") {
-            const str = item.trim();
-            if (!str) return;
+      const itemsToProcess = rawAnswers ? [...rawAnswers] : [];
 
-            // Check single letter option like "A", "B", "C", "D"
+      if (typeof answer.answer === "string") {
+        itemsToProcess.push(answer.answer);
+      }
+      if (typeof answer.content === "string" && !rawAnswers) {
+        itemsToProcess.push(answer.content);
+      }
+
+      itemsToProcess.forEach(item => {
+        if (typeof item === "number") {
+          const num = parseInt(item, 10);
+          if (!isNaN(num) && num >= 0) indices.push(num);
+        } else if (typeof item === "string") {
+          const str = item.trim();
+          if (!str) return;
+
+          // If item is comma-separated or space-separated letters e.g. "A, C" or "A, B, D" or "A and C"
+          const letterMatches = str.match(/\b([A-Z])\b/gi);
+          const isMostlyLetters = letterMatches && (str.length <= letterMatches.length * 6);
+          if (isMostlyLetters && letterMatches.length > 0) {
+            letterMatches.forEach(l => {
+              const u = l.toUpperCase();
+              letters.push(u);
+              const idx = u.charCodeAt(0) - 65;
+              if (idx >= 0) indices.push(idx);
+            });
+          } else {
+            // Check single letter option e.g. "A", "B"
             const singleLetter = str.match(/^[A-Z]$/i);
             if (singleLetter) {
-              const idx = singleLetter[0].toUpperCase().charCodeAt(0) - 65;
+              const u = singleLetter[0].toUpperCase();
+              letters.push(u);
+              const idx = u.charCodeAt(0) - 65;
               if (idx >= 0) indices.push(idx);
             } else {
-              // Check "Option A", "A.", "A)", "(A)", "A:"
+              // Check letter prefix e.g. "Option A", "A.", "A)", "(A)", "A:"
               const letterPrefix = str.match(/^(?:option\s+)?\(?([A-Z])[\.\)\:\s]/i);
               if (letterPrefix) {
-                const idx = letterPrefix[1].toUpperCase().charCodeAt(0) - 65;
+                const u = letterPrefix[1].toUpperCase();
+                letters.push(u);
+                const idx = u.charCodeAt(0) - 65;
                 if (idx >= 0) indices.push(idx);
               }
             }
-            texts.push(str);
-            if (!content) content = str;
           }
-        });
-      }
+
+          texts.push(str);
+          if (!content) content = str;
+        }
+      });
 
       // 2. Legacy / alternate integer index fields
       const rawIndices = answer.correctOptionsIndex ??
@@ -3646,8 +3817,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
                          answer.correct_options_index ??
                          answer.correctIndex ??
                          answer.correctIndices ??
-                         answer.indices ??
-                         (typeof answer.answer === "number" ? answer.answer : null);
+                         answer.indices;
 
       if (Array.isArray(rawIndices)) {
         rawIndices.forEach(n => {
@@ -3659,7 +3829,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         if (!isNaN(num) && num >= 0) indices.push(num);
       }
 
-      // Convert 1-indexed to 0-indexed if no 0 is present and max equals options count
+      // Convert 1-indexed to 0-indexed if needed
       if (totalOptionsCount && totalOptionsCount > 0 && indices.length > 0) {
         const hasZero = indices.some(i => i === 0);
         const hasMax = indices.some(i => i === totalOptionsCount);
@@ -3668,15 +3838,12 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         }
       }
 
-      // 3. Legacy / alternate text fields
+      // 3. Legacy text fields
       const rawTexts = answer.correctOptions ??
                        answer.correctOption ??
                        answer.correct_options ??
                        answer.correctText ??
-                       answer.correctAnswers ??
-                       (typeof answer.content === "string" ? answer.content : null) ??
-                       (typeof answer.text === "string" ? answer.text : null) ??
-                       (typeof answer.answer === "string" && !rawAnswers ? answer.answer : null);
+                       answer.correctAnswers;
 
       if (Array.isArray(rawTexts)) {
         rawTexts.forEach(t => {
@@ -3689,15 +3856,115 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       }
 
       if (!content) {
-        content = answer.content || answer.text || (typeof answer.answer === "string" ? answer.answer : "") || (texts.length > 0 ? texts[0] : "");
+        content = answer.content || answer.text || (texts.length > 0 ? texts[0] : "");
       }
 
       indices = Array.from(new Set(indices)).filter(i => i >= 0);
+      letters = Array.from(new Set(letters));
 
-      return { indices, texts, content };
+      return { indices, texts, letters, content };
     }
 
-    function fillQuizAnswersInDOM(aiAnswers, onProgress) {
+    /**
+     * Applies answers to a single question container in the DOM.
+     * Selects matching checkboxes/radios, unchecks non-matching checkboxes,
+     * adds visual recommendation badges, and verifies DOM persistence.
+     */
+    async function applyQuestionAnswers(questionEl, answer) {
+      if (!questionEl || !answer) return { markedCount: 0, verified: false };
+
+      let markedCount = 0;
+
+      // 1. Text input / textarea
+      const textInput = questionEl.querySelector('textarea, input[type="text"]');
+      if (textInput && isElementVisible(textInput)) {
+        const normalized = normalizeQuizAnswer(answer);
+        if (normalized.content) {
+          const proto = textInput.tagName === "TEXTAREA" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          const nativeSetter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+          if (nativeSetter) {
+            nativeSetter.call(textInput, normalized.content);
+          } else {
+            textInput.value = normalized.content;
+          }
+          if (textInput._valueTracker) {
+            textInput._valueTracker.setValue("");
+          }
+          textInput.dispatchEvent(new Event("input", { bubbles: true }));
+          textInput.dispatchEvent(new Event("change", { bubbles: true }));
+          markedCount++;
+          return { markedCount, verified: true };
+        }
+      }
+
+      // 2. Choice options (radio buttons and checkboxes)
+      const visibleOptions = findQuestionOptionInputs(questionEl);
+      if (visibleOptions.length === 0) {
+        return { markedCount: 0, verified: false };
+      }
+
+      const normalized = normalizeQuizAnswer(answer, visibleOptions.length);
+      const isMultiSelect = visibleOptions.some(opt => opt.type === "checkbox" || opt.getAttribute("role") === "checkbox");
+
+      for (let optIdx = 0; optIdx < visibleOptions.length; optIdx++) {
+        const optInput = visibleOptions[optIdx];
+
+        if (isAcademicIntegrityDeclaration(optInput)) {
+          continue;
+        }
+
+        const label = optInput.closest("label") ||
+                      (optInput.id ? document.querySelector(`label[for="${optInput.id}"]`) : null) ||
+                      optInput.parentElement;
+        const optCleanText = label ? getCleanVisibleText(label) : "";
+
+        const isMatch = matchOptionToAnswer(optInput, optIdx, optCleanText, normalized, visibleOptions.length);
+
+        if (isMultiSelect) {
+          if (isMatch) {
+            const success = await setInputChecked(optInput, true);
+            if (success) markedCount++;
+          } else {
+            // Uncheck non-matching checkbox if it was previously checked
+            await setInputChecked(optInput, false);
+          }
+        } else {
+          // Single-choice radio
+          if (isMatch) {
+            const success = await setInputChecked(optInput, true);
+            if (success) markedCount++;
+          }
+        }
+
+        // Visual feedback & recommendation badge
+        const choiceBox = label || optInput.parentElement;
+        if (choiceBox) {
+          if (isMatch) {
+            choiceBox.classList.add("coursera-suggested-choice");
+            let tag = choiceBox.querySelector(".coursera-ai-tag");
+            if (!tag) {
+              tag = document.createElement("span");
+              tag.className = "coursera-ai-tag";
+              tag.textContent = "AI Recommended ✓";
+              choiceBox.appendChild(tag);
+            }
+          } else {
+            choiceBox.classList.remove("coursera-suggested-choice");
+            const tag = choiceBox.querySelector(".coursera-ai-tag");
+            if (tag) tag.remove();
+          }
+        }
+      }
+
+      // Verify DOM state: check whether any option in this question is actually checked
+      const anyCheckedInDOM = visibleOptions.some(opt => opt.checked || opt.getAttribute("aria-checked") === "true");
+      return { markedCount, verified: anyCheckedInDOM };
+    }
+
+    /**
+     * Applies AI answers across all questions in the DOM with question-by-question smooth scrolling.
+     */
+    async function fillQuizAnswersInDOM(aiAnswers, onProgress) {
       if (!aiAnswers || !Array.isArray(aiAnswers) || aiAnswers.length === 0) return false;
 
       const questionElements = findVisibleQuestionElements();
@@ -3706,19 +3973,22 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         return false;
       }
 
-      const nativeInputSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
-      const nativeTextareaSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
-
       let totalMarkedCount = 0;
 
-      questionElements.forEach((questionEl, index) => {
-        if (typeof onProgress === "function") {
-          onProgress(index + 1, questionElements.length);
-        }
+      for (let index = 0; index < questionElements.length; index++) {
+        const questionEl = questionElements[index];
+
+        // Smoothly scroll question into view
+        try {
+          questionEl.scrollIntoView({ behavior: "smooth", block: "center" });
+        } catch (_) {}
+
+        // Pacing delay so DOM renders and user sees progress cleanly
+        await sleep(280);
 
         // Align question: check if prompt matches an answer entry, otherwise fallback to index
         let answer = aiAnswers[index];
-        const promptEl = questionEl.querySelector(".c-question-prompt, [data-testid*='prompt'], [class*='prompt'], legend, h3, h4, p");
+        const promptEl = questionEl.querySelector(".c-question-prompt, [data-testid*='prompt'], [class*='prompt'], legend, h3, h4");
         const qPrompt = promptEl ? getCleanVisibleText(promptEl) : "";
 
         if (qPrompt) {
@@ -3726,86 +3996,24 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
             if (!a || !a.question || typeof a.question !== "string") return false;
             const aQ = a.question.trim().toLowerCase();
             const domQ = qPrompt.trim().toLowerCase();
-            return domQ.includes(aQ) || aQ.includes(domQ);
+            return (domQ.length > 8 && aQ.includes(domQ)) || (aQ.length > 8 && domQ.includes(aQ));
           });
           if (promptMatch) {
             answer = promptMatch;
           }
         }
 
-        if (!answer) return;
+        if (answer) {
+          const { markedCount } = await applyQuestionAnswers(questionEl, answer);
+          totalMarkedCount += markedCount;
 
-        // 1. Textarea / free response question
-        const textInput = questionEl.querySelector('textarea, input[type="text"]');
-        if (textInput && isElementVisible(textInput)) {
-          const normalized = normalizeQuizAnswer(answer);
-          if (normalized.content) {
-            const setter = textInput.tagName === "TEXTAREA" ? nativeTextareaSetter : nativeInputSetter;
-            if (setter) {
-              setter.call(textInput, normalized.content);
-            } else {
-              textInput.value = normalized.content;
-            }
-            textInput.dispatchEvent(new Event("input", { bubbles: true }));
-            textInput.dispatchEvent(new Event("change", { bubbles: true }));
-            totalMarkedCount++;
+          if (typeof onProgress === "function") {
+            onProgress(index + 1, questionElements.length, { questionNum: index + 1, markedCount });
           }
-          return;
         }
 
-        // 2. Choice options (radio buttons and checkboxes)
-        const visibleOptions = Array.from(questionEl.querySelectorAll('input[type="radio"], input[type="checkbox"]'))
-          .filter(isOptionInputVisible);
-
-        const normalized = normalizeQuizAnswer(answer, visibleOptions.length);
-
-        visibleOptions.forEach((optInput, optIdx) => {
-          // STRICT SAFETY & ETHICS: Never select academic integrity declarations or honor pledges
-          if (isAcademicIntegrityDeclaration(optInput)) {
-            console.log("[Academic Integrity] Skipped honor code declaration checkbox.");
-            return;
-          }
-
-          let isMatch = normalized.indices.includes(optIdx);
-
-          // Text-based fallback matching if index didn't match
-          if (!isMatch && normalized.texts.length > 0) {
-            const label = optInput.closest("label") || (optInput.id ? document.querySelector(`label[for="${optInput.id}"]`) : null) || optInput.parentElement;
-            const optCleanText = label ? getCleanVisibleText(label) : "";
-            if (optCleanText) {
-              const normOpt = optCleanText.toLowerCase().replace(/\s+/g, " ");
-              isMatch = normalized.texts.some(ct => {
-                if (typeof ct !== "string") return false;
-                const normCt = ct.trim().toLowerCase().replace(/\s+/g, " ");
-                return normOpt.includes(normCt) || normCt.includes(normOpt);
-              });
-            }
-          }
-
-          if (optInput.type === "checkbox") {
-            if (isMatch && !optInput.checked) {
-              selectChoiceOption(optInput);
-              totalMarkedCount++;
-            } else if (!isMatch && optInput.checked) {
-              uncheckChoiceOption(optInput);
-            }
-          } else {
-            // Radio button
-            if (isMatch) {
-              selectChoiceOption(optInput);
-              totalMarkedCount++;
-            }
-          }
-
-          // Visual indication on AI suggested choice in Coursera DOM
-          if (isMatch) {
-            const choiceBox = optInput.closest("label") || optInput.parentElement;
-            if (choiceBox) {
-              choiceBox.classList.add("coursera-suggested-choice");
-            }
-          }
-        });
-      });
+        await sleep(120);
+      }
 
       if (totalMarkedCount > 0) {
         showToast(`Selected ${totalMarkedCount} option${totalMarkedCount === 1 ? '' : 's'}.`, "success");
