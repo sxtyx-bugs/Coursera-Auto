@@ -280,56 +280,177 @@
       return true; // Keep message channel open for async sendResponse
     }
 
-    // Gemini API Request Proxy (handles fetch in extension context to avoid page CSP issues)
-    if (request.action === "GEMINI_PROXY_FETCH") {
+    // AI Provider Proxy Helpers & Whitelist
+    const ALLOWED_AI_HOSTS = [
+      "https://generativelanguage.googleapis.com/",
+      "https://api.groq.com/",
+      "https://api.cerebras.ai/",
+      "https://openrouter.ai/"
+    ];
+
+    function isAllowedAiUrl(url) {
+      if (!url || typeof url !== "string") return false;
+      return ALLOWED_AI_HOSTS.some(host => url.startsWith(host));
+    }
+
+    async function executeAiProxyFetch(url, options, timeoutMs = 30000) {
+      if (!isAllowedAiUrl(url)) {
+        return { error: "Unauthorized destination host: " + url };
+      }
+      const controller = new AbortController();
+      const actualTimeout = Math.min(Math.max(timeoutMs || 30000, 5000), 120000);
+      const timeoutId = setTimeout(() => controller.abort(), actualTimeout);
+
+      try {
+        const fetchHeaders = { ...(options?.headers || {}) };
+        let fetchBody = options?.body;
+
+        if (typeof fetchBody === "string") {
+          const encoded = new TextEncoder().encode(fetchBody);
+          fetchHeaders["Content-Type"] = fetchHeaders["Content-Type"] || "application/json";
+          fetchHeaders["Content-Length"] = String(encoded.length);
+          fetchBody = encoded;
+        } else if (fetchBody && fetchBody instanceof Uint8Array) {
+          fetchHeaders["Content-Length"] = String(fetchBody.length);
+        } else if (options?.method === "POST" && !fetchBody) {
+          fetchHeaders["Content-Length"] = "0";
+          fetchBody = new Uint8Array(0);
+        }
+
+        const fetchRes = await fetch(url, {
+          ...(options || {}),
+          headers: fetchHeaders,
+          body: fetchBody,
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        const bodyText = await fetchRes.text();
+        return {
+          ok: fetchRes.ok,
+          status: fetchRes.status,
+          statusText: fetchRes.statusText,
+          text: bodyText
+        };
+      } catch (netErr) {
+        clearTimeout(timeoutId);
+        const isAbort = netErr.name === "AbortError" || /aborted/i.test(netErr.message);
+        return {
+          error: isAbort ? `Request timed out after ${Math.round(actualTimeout / 1000)}s` : (netErr.message || "Network request failed in background worker"),
+          status: isAbort ? 408 : 0,
+          isTimeout: isAbort
+        };
+      }
+    }
+
+    // Unified AI API Request Proxy (handles fetch in extension context to avoid page CSP issues)
+    if (request.action === "AI_PROXY_FETCH" || request.action === "GEMINI_PROXY_FETCH") {
       (async () => {
         try {
-          const { url, options } = request.payload || {};
+          const { url, options, timeoutMs } = request.payload || {};
           if (!url || typeof url !== "string") {
             sendResponse({ error: "Missing or invalid URL" });
             return;
           }
-          if (!url.startsWith("https://generativelanguage.googleapis.com/")) {
-            sendResponse({ error: "Unauthorized destination host" });
-            return;
-          }
-          const controller = new AbortController();
-          // Set to 90 seconds to allow deep reasoning / thinking models to finish full multi-question batches
-          const timeoutId = setTimeout(() => controller.abort(), 90000);
-
-          const fetchHeaders = { ...(options?.headers || {}) };
-          let fetchBody = options?.body;
-
-          if (typeof fetchBody === "string") {
-            const encoded = new TextEncoder().encode(fetchBody);
-            fetchHeaders["Content-Type"] = fetchHeaders["Content-Type"] || "application/json";
-            fetchHeaders["Content-Length"] = String(encoded.length);
-            fetchBody = encoded;
-          } else if (fetchBody && fetchBody instanceof Uint8Array) {
-            fetchHeaders["Content-Length"] = String(fetchBody.length);
-          } else if (options?.method === "POST" && !fetchBody) {
-            fetchHeaders["Content-Length"] = "0";
-            fetchBody = new Uint8Array(0);
-          }
-
-          const fetchRes = await fetch(url, {
-            ...(options || {}),
-            headers: fetchHeaders,
-            body: fetchBody,
-            signal: controller.signal
-          });
-          clearTimeout(timeoutId);
-          const bodyText = await fetchRes.text();
-          sendResponse({
-            ok: fetchRes.ok,
-            status: fetchRes.status,
-            statusText: fetchRes.statusText,
-            text: bodyText
-          });
+          const result = await executeAiProxyFetch(url, options, timeoutMs || 35000);
+          sendResponse(result);
         } catch (netErr) {
           sendResponse({
             error: netErr.message || "Network request failed in background worker"
           });
+        }
+      })();
+      return true;
+    }
+
+    // Test AI Provider Connection
+    if (request.action === "TEST_AI_PROVIDER") {
+      (async () => {
+        const { provider, apiKey, model } = request.payload || {};
+        if (!apiKey || typeof apiKey !== "string" || !apiKey.trim()) {
+          sendResponse({ ok: false, error: "API key is required" });
+          return;
+        }
+
+        const trimmedKey = apiKey.trim();
+        try {
+          let testUrl = "";
+          let testOptions = {};
+
+          if (provider === "groq") {
+            testUrl = "https://api.groq.com/openai/v1/chat/completions";
+            testOptions = {
+              method: "POST",
+              headers: {
+                "Authorization": `Bearer ${trimmedKey}`,
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({
+                model: model || "llama-3.3-70b-versatile",
+                messages: [{ role: "user", content: "ping" }],
+                max_tokens: 1
+              })
+            };
+          } else if (provider === "cerebras") {
+            testUrl = "https://api.cerebras.ai/v1/chat/completions";
+            testOptions = {
+              method: "POST",
+              headers: {
+                "Authorization": `Bearer ${trimmedKey}`,
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({
+                model: model || "llama3.3-70b",
+                messages: [{ role: "user", content: "ping" }],
+                max_tokens: 1
+              })
+            };
+          } else if (provider === "openrouter") {
+            testUrl = "https://openrouter.ai/api/v1/chat/completions";
+            testOptions = {
+              method: "POST",
+              headers: {
+                "Authorization": `Bearer ${trimmedKey}`,
+                "HTTP-Referer": "https://github.com/sxtyx-bugs/Coursera-Auto",
+                "X-Title": "Coursera Assistant",
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({
+                model: model || "meta-llama/llama-3.3-70b-instruct:free",
+                messages: [{ role: "user", content: "ping" }],
+                max_tokens: 1
+              })
+            };
+          } else if (provider === "gemini") {
+            const cleanModel = (model || "gemini-2.5-flash").replace(/^\/?(models\/)+/, "");
+            testUrl = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}?key=${encodeURIComponent(trimmedKey)}`;
+            testOptions = { method: "GET" };
+          } else {
+            sendResponse({ ok: false, error: `Unknown provider: ${provider}` });
+            return;
+          }
+
+          const res = await executeAiProxyFetch(testUrl, testOptions, 15000);
+          if (res.ok) {
+            sendResponse({ ok: true, message: "Connection successful" });
+          } else {
+            let detail = "";
+            try {
+              const parsed = JSON.parse(res.text || "{}");
+              detail = parsed.error?.message || parsed.message || res.statusText || "";
+            } catch (_) {
+              detail = res.text || res.statusText || "";
+            }
+            if (trimmedKey && detail.includes(trimmedKey)) {
+              detail = detail.split(trimmedKey).join("[REDACTED]");
+            }
+            sendResponse({
+              ok: false,
+              status: res.status,
+              error: detail || `HTTP ${res.status}: ${res.error || "Connection failed"}`
+            });
+          }
+        } catch (err) {
+          sendResponse({ ok: false, error: err.message || "Failed to test provider connection" });
         }
       })();
       return true;

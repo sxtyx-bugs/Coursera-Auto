@@ -24,15 +24,38 @@
   const step1 = document.getElementById("step1");
   const step2 = document.getElementById("step2");
   const step3 = document.getElementById("step3");
+  const step2Text = document.getElementById("step2Text");
   const btnSettings = document.getElementById("btnSettings");
   const btnDismiss = document.getElementById("btnDismiss");
   const footerHint = document.getElementById("footerHint");
 
   function setModelDisplay(modelId) {
     if (!modelBadge) return;
-    const cleanId = (modelId || "gemini-3-flash-preview").replace(/^\/?(models\/)+/, "").trim();
-    const displayName = MODEL_DISPLAY_NAMES[cleanId] || "Gemini 3 Flash";
-    modelBadge.textContent = displayName;
+    if (!modelId) {
+      modelBadge.textContent = "AI Solver";
+      return;
+    }
+    const cleanId = String(modelId).replace(/^\/?(models\/)+/, "").trim();
+    if (MODEL_DISPLAY_NAMES[cleanId]) {
+      modelBadge.textContent = MODEL_DISPLAY_NAMES[cleanId];
+    } else if (cleanId.includes("llama-3.3") || cleanId.includes("llama3.3")) {
+      modelBadge.textContent = cleanId.toLowerCase().includes("groq")
+        ? "Groq • LLaMA 3.3"
+        : (cleanId.toLowerCase().includes("cerebras") ? "Cerebras • LLaMA 3.3" : "LLaMA 3.3 70B");
+    } else if (cleanId.includes("llama-3.1") || cleanId.includes("llama3.1")) {
+      modelBadge.textContent = "LLaMA 3.1 8B";
+    } else if (cleanId.includes("gemini-2.5-flash")) {
+      modelBadge.textContent = "Gemini 2.5 Flash";
+    } else if (cleanId.includes("gemini-2.0-flash")) {
+      modelBadge.textContent = "Gemini 2.0 Flash";
+    } else if (cleanId.includes("gemini-1.5-flash")) {
+      modelBadge.textContent = "Gemini 1.5 Flash";
+    } else {
+      modelBadge.textContent = cleanId.length > 22 ? cleanId.slice(0, 20) + "..." : cleanId;
+    }
+    if (step2Text && modelBadge.textContent) {
+      step2Text.textContent = `2. AI Reasoning (${modelBadge.textContent})`;
+    }
   }
 
   function setStepState(stepElem, state) {

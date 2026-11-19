@@ -47,30 +47,263 @@
           </div>
         </section>
 
-        <!-- Section: AI Quiz Assistance -->
+        <!-- Section: Multi-Provider AI System -->
         <section class="settings-section">
-          <h2 class="section-title">AI QUIZ SETTINGS</h2>
-          <p class="section-desc">Configure the Google Gemini API connection for automatic quiz solving.</p>
+          <h2 class="section-title">AI ENGINE &amp; MULTI-PROVIDER FALLBACK</h2>
+          <p class="section-desc">Reliable, provider-agnostic assessment reasoning with automated failover on rate limits or errors.</p>
 
+          <!-- Strategy & Routing Card -->
           <div class="tray-card">
-            <!-- API Key -->
-            <div class="setting-item vertical">
+            <!-- Primary Provider Selection -->
+            <div class="setting-item">
               <div class="setting-text">
-                <label for="geminiKeyInput" class="setting-name">Gemini API Key</label>
-                <span class="setting-hint">Stored strictly on your device. Direct client connection to Gemini.</span>
+                <label for="primaryProviderSelect" class="setting-name">Primary Provider</label>
+                <span class="setting-hint">Initial engine dispatched for question analysis.</span>
               </div>
               <div class="input-well">
-                <span class="well-tag">KEY</span>
-                <input type="password" id="geminiKeyInput" placeholder="Enter Gemini API key (AIzaSy...)" autocomplete="off" spellcheck="false" />
+                <span class="well-tag">PRI</span>
+                <select id="primaryProviderSelect">
+                  <option value="groq" selected>Groq (Ultra-Fast Reasoning • Primary)</option>
+                  <option value="cerebras">Cerebras (High Speed • Fallback 1)</option>
+                  <option value="openrouter">OpenRouter (Free Multi-Model • Fallback 2)</option>
+                  <option value="gemini">Google Gemini (Deep Reasoning • Fallback 3)</option>
+                </select>
               </div>
             </div>
 
             <div class="divider"></div>
 
-            <!-- Model Selection -->
+            <!-- Priority Fallback Chain Preview -->
+            <div class="setting-item vertical">
+              <div class="setting-text">
+                <span class="setting-name">Active Failover Execution Sequence</span>
+                <span class="setting-hint">If primary returns 429 quota exhaustion, timeout, or server error, solver auto-transitions sequentially:</span>
+              </div>
+              <div class="priority-flow" id="priorityChain">
+                <span class="priority-pill primary" id="pillPrimary">1. Groq</span>
+                <span class="priority-arrow">➔</span>
+                <span class="priority-pill" id="pillFb1">2. Cerebras</span>
+                <span class="priority-arrow">➔</span>
+                <span class="priority-pill" id="pillFb2">3. OpenRouter</span>
+                <span class="priority-arrow">➔</span>
+                <span class="priority-pill" id="pillFb3">4. Gemini</span>
+              </div>
+            </div>
+
+            <div class="divider"></div>
+
+            <!-- Request Timeout & Auto-Solve -->
             <div class="setting-item">
               <div class="setting-text">
-                <label for="geminiModelSelect" class="setting-name">Reasoning Model</label>
+                <label for="timeoutInput" class="setting-name">Provider Timeout Limit</label>
+                <span class="setting-hint">Seconds before timing out and advancing to next fallback (10 – 60s).</span>
+              </div>
+              <div class="input-well-compact">
+                <input type="number" id="timeoutInput" min="10" max="60" step="5" value="25" />
+                <span class="unit-tag">SEC</span>
+              </div>
+            </div>
+
+            <div class="divider"></div>
+
+            <div class="setting-item">
+              <div class="setting-text">
+                <label for="geminiAutoQuizToggle" class="setting-name">Auto-Solve Quizzes on Open</label>
+                <span class="setting-hint">Automatically initialize solver when a quiz draft is opened.</span>
+              </div>
+              <label class="skeuo-toggle" for="geminiAutoQuizToggle">
+                <input type="checkbox" id="geminiAutoQuizToggle" />
+                <span class="toggle-track"><span class="toggle-thumb"></span></span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Provider 1: Groq API -->
+          <div class="tray-card" style="margin-top: 14px;">
+            <div class="provider-card-header">
+              <div class="provider-title-group">
+                <span class="provider-name">1. Groq API</span>
+                <span class="provider-status-badge" id="groqStatusBadge">Untested</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer" class="link-subtle">Get Free Key ↗</a>
+                <label class="skeuo-toggle" for="groqEnableToggle" title="Enable/Disable Groq">
+                  <input type="checkbox" id="groqEnableToggle" checked />
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="setting-item vertical">
+              <div class="setting-text">
+                <label for="groqKeyInput" class="setting-name">Groq API Key</label>
+                <span class="setting-hint">Stored securely on device. Never exposed in logs or network telemetry.</span>
+              </div>
+              <div class="input-well">
+                <span class="well-tag">KEY</span>
+                <input type="password" id="groqKeyInput" placeholder="gsk_..." autocomplete="off" spellcheck="false" />
+                <button type="button" class="toggle-key-btn" id="groqToggleKey" title="Toggle visibility">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-text">
+                <label for="groqModelSelect" class="setting-name">Groq Reasoning Model</label>
+                <span class="setting-hint">Active LLaMA 3.3 text model on Groq LPU architecture.</span>
+              </div>
+              <div class="input-well">
+                <span class="well-tag">MDL</span>
+                <select id="groqModelSelect">
+                  <option value="llama-3.3-70b-versatile" selected>llama-3.3-70b-versatile (Recommended)</option>
+                  <option value="llama-3.1-8b-instant">llama-3.1-8b-instant (Fastest)</option>
+                  <option value="mixtral-8x7b-32768">mixtral-8x7b-32768 (MoE Architecture)</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="provider-action-row">
+              <button type="button" class="btn-test-provider" id="groqTestBtn">Test Connection</button>
+              <span id="groqTestFeedback" class="test-feedback"></span>
+            </div>
+          </div>
+
+          <!-- Provider 2: Cerebras API -->
+          <div class="tray-card" style="margin-top: 14px;">
+            <div class="provider-card-header">
+              <div class="provider-title-group">
+                <span class="provider-name">2. Cerebras API</span>
+                <span class="provider-status-badge" id="cerebrasStatusBadge">Untested</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <a href="https://cloud.cerebras.ai/" target="_blank" rel="noopener noreferrer" class="link-subtle">Get Free Key ↗</a>
+                <label class="skeuo-toggle" for="cerebrasEnableToggle" title="Enable/Disable Cerebras">
+                  <input type="checkbox" id="cerebrasEnableToggle" checked />
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="setting-item vertical">
+              <div class="setting-text">
+                <label for="cerebrasKeyInput" class="setting-name">Cerebras API Key</label>
+                <span class="setting-hint">Stored securely on device. Sub-second wafer-scale inference.</span>
+              </div>
+              <div class="input-well">
+                <span class="well-tag">KEY</span>
+                <input type="password" id="cerebrasKeyInput" placeholder="csk-..." autocomplete="off" spellcheck="false" />
+                <button type="button" class="toggle-key-btn" id="cerebrasToggleKey" title="Toggle visibility">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-text">
+                <label for="cerebrasModelSelect" class="setting-name">Cerebras Model</label>
+                <span class="setting-hint">Active LLaMA model hosted on Cerebras CS-3 systems.</span>
+              </div>
+              <div class="input-well">
+                <span class="well-tag">MDL</span>
+                <select id="cerebrasModelSelect">
+                  <option value="llama3.3-70b" selected>llama3.3-70b (Recommended)</option>
+                  <option value="llama3.1-8b">llama3.1-8b (High Throughput)</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="provider-action-row">
+              <button type="button" class="btn-test-provider" id="cerebrasTestBtn">Test Connection</button>
+              <span id="cerebrasTestFeedback" class="test-feedback"></span>
+            </div>
+          </div>
+
+          <!-- Provider 3: OpenRouter API -->
+          <div class="tray-card" style="margin-top: 14px;">
+            <div class="provider-card-header">
+              <div class="provider-title-group">
+                <span class="provider-name">3. OpenRouter API</span>
+                <span class="provider-status-badge" id="openrouterStatusBadge">Untested</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" class="link-subtle">Get Free Key ↗</a>
+                <label class="skeuo-toggle" for="openrouterEnableToggle" title="Enable/Disable OpenRouter">
+                  <input type="checkbox" id="openrouterEnableToggle" checked />
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="setting-item vertical">
+              <div class="setting-text">
+                <label for="openrouterKeyInput" class="setting-name">OpenRouter API Key</label>
+                <span class="setting-hint">Stored securely on device. Unified access to free &amp; open text models.</span>
+              </div>
+              <div class="input-well">
+                <span class="well-tag">KEY</span>
+                <input type="password" id="openrouterKeyInput" placeholder="sk-or-v1-..." autocomplete="off" spellcheck="false" />
+                <button type="button" class="toggle-key-btn" id="openrouterToggleKey" title="Toggle visibility">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-text">
+                <label for="openrouterModelSelect" class="setting-name">OpenRouter Model</label>
+                <span class="setting-hint">Select a free text model (non-vision).</span>
+              </div>
+              <div class="input-well">
+                <span class="well-tag">MDL</span>
+                <select id="openrouterModelSelect">
+                  <option value="meta-llama/llama-3.3-70b-instruct:free" selected>meta-llama/llama-3.3-70b-instruct:free (Recommended Free)</option>
+                  <option value="google/gemini-2.0-flash-exp:free">google/gemini-2.0-flash-exp:free (Google Experimental)</option>
+                  <option value="mistralai/mistral-small-24b-instruct-2501:free">mistralai/mistral-small-24b-instruct:free (Mistral)</option>
+                  <option value="deepseek/deepseek-r1:free">deepseek/deepseek-r1:free (DeepSeek Reasoning)</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="provider-action-row">
+              <button type="button" class="btn-test-provider" id="openrouterTestBtn">Test Connection</button>
+              <span id="openrouterTestFeedback" class="test-feedback"></span>
+            </div>
+          </div>
+
+          <!-- Provider 4: Google Gemini API (Fallback 3) -->
+          <div class="tray-card" style="margin-top: 14px;">
+            <div class="provider-card-header">
+              <div class="provider-title-group">
+                <span class="provider-name">4. Google Gemini API</span>
+                <span class="provider-status-badge" id="geminiStatusBadge">Untested</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" class="link-subtle">Get Free Key ↗</a>
+                <label class="skeuo-toggle" for="geminiEnableToggle" title="Enable/Disable Gemini">
+                  <input type="checkbox" id="geminiEnableToggle" checked />
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="setting-item vertical">
+              <div class="setting-text">
+                <label for="geminiKeyInput" class="setting-name">Gemini API Key</label>
+                <span class="setting-hint">Stored strictly on your device. Direct client connection to Google AI Studio.</span>
+              </div>
+              <div class="input-well">
+                <span class="well-tag">KEY</span>
+                <input type="password" id="geminiKeyInput" placeholder="AIzaSy..." autocomplete="off" spellcheck="false" />
+                <button type="button" class="toggle-key-btn" id="geminiToggleKey" title="Toggle visibility">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-text">
+                <label for="geminiModelSelect" class="setting-name">Gemini Model</label>
                 <span class="setting-hint">Select the Gemini model for solving assessments.</span>
               </div>
               <div class="input-well">
@@ -79,23 +312,15 @@
                   <option value="gemini-2.5-flash" selected>Gemini 2.5 Flash (Flagship Fast • Recommended)</option>
                   <option value="gemini-2.0-flash">Gemini 2.0 Flash (Ultra Low Latency)</option>
                   <option value="gemini-1.5-flash">Gemini 1.5 Flash (Broadly Compatible)</option>
-                  <option value="gemini-1.5-pro">Gemini 1.5 Pro (Deep Reasoning)</option>
+                  <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
+                  <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
                 </select>
               </div>
             </div>
 
-            <div class="divider"></div>
-
-            <!-- Auto-Quiz Toggle -->
-            <div class="setting-item">
-              <div class="setting-text">
-                <label for="geminiAutoQuizToggle" class="setting-name">Auto-Solve Quizzes</label>
-                <span class="setting-hint">Automatically initialize solver when a quiz draft is opened.</span>
-              </div>
-              <label class="skeuo-toggle" for="geminiAutoQuizToggle">
-                <input type="checkbox" id="geminiAutoQuizToggle" />
-                <span class="toggle-track"><span class="toggle-thumb"></span></span>
-              </label>
+            <div class="provider-action-row">
+              <button type="button" class="btn-test-provider" id="geminiTestBtn">Test Connection</button>
+              <span id="geminiTestFeedback" class="test-feedback"></span>
             </div>
           </div>
         </section>

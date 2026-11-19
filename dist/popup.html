@@ -102,26 +102,33 @@
         <div class="panel-box">
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <div class="section-label" style="margin-bottom: 0;">AI ENGINE CONFIG</div>
-            <a href="https://aistudio.google.com/app/apikey" target="_blank" class="api-link" id="apiKeyLink">Get Free Key ↗</a>
+            <a href="https://console.groq.com/keys" target="_blank" class="api-link" id="apiKeyLink">Get Free Key ↗</a>
           </div>
 
           <div class="well-group">
+            <!-- Provider Selector Well -->
+            <div class="input-well">
+              <span class="well-label">ENG</span>
+              <select id="provider-select">
+                <option value="groq" selected>Groq (Primary • Ultra-Fast)</option>
+                <option value="cerebras">Cerebras (Fallback 1 • Fast)</option>
+                <option value="openrouter">OpenRouter (Fallback 2 • Free)</option>
+                <option value="gemini">Google Gemini (Fallback 3)</option>
+              </select>
+            </div>
+
             <!-- Model Well -->
             <div class="input-well">
               <span class="well-label">MDL</span>
               <select id="model-select">
-                <option value="gemini-3.8-flash" selected>Gemini 3.8 Flash (Latest • Recommended)</option>
-                <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash Lite (Ultra Fast)</option>
-                <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
-                <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
-                <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
+                <option value="llama-3.3-70b-versatile" selected>llama-3.3-70b-versatile</option>
               </select>
             </div>
 
             <!-- Key Well -->
             <div class="input-well">
               <span class="well-label">KEY</span>
-              <input type="password" id="key" placeholder="Paste Gemini API key" autocomplete="off" spellcheck="false" />
+              <input type="password" id="key" placeholder="Paste API key" autocomplete="off" spellcheck="false" />
               <button type="button" class="toggle-key-btn" id="toggleKeyVisibility" title="Show key">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
@@ -130,8 +137,11 @@
               </button>
             </div>
 
-            <button id="save" class="btn-tactile-secondary">Save Settings</button>
-            <p id="key-status" class="status-hint">Required for auto-solving Coursera quizzes.</p>
+            <div style="display: flex; gap: 8px;">
+              <button id="save" class="btn-tactile-secondary" style="flex: 1;">Save Settings</button>
+              <button id="openSettingsDetailBtn" class="btn-tactile-secondary" style="flex: 1;" title="Advanced multi-provider settings">All Settings ⚙</button>
+            </div>
+            <p id="key-status" class="status-hint">Auto-failover enabled across all configured providers.</p>
           </div>
         </div>
 
