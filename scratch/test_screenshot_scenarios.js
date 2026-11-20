@@ -232,6 +232,7 @@ ${workflowCoreCode}
 
 exports.isEligibleAssignmentPage = isEligibleAssignmentPage;
 exports.findAssignmentStartButton = findAssignmentStartButton;
+exports.handlePreQuizModals = handlePreQuizModals;
 exports.findHonorCodeSection = findHonorCodeSection;
 exports.findHonorCodeCheckbox = findHonorCodeCheckbox;
 exports.isHonorCodeCheckboxChecked = isHonorCodeCheckboxChecked;
@@ -246,6 +247,7 @@ vm.runInNewContext(combinedCode, sandbox);
 const {
   isEligibleAssignmentPage,
   findAssignmentStartButton,
+  handlePreQuizModals,
   findHonorCodeSection,
   findHonorCodeCheckbox,
   isHonorCodeCheckboxChecked,
@@ -309,6 +311,34 @@ runTest("Scenario 1C: Start assignment clicked once, tracking prevents duplicate
   const startBtn = findAssignmentStartButton();
   startBtn.click();
   assert.strictEqual(startBtn.clickedTimes, 1, "Must be clicked exactly once");
+});
+
+runTest("Scenario 1D: Recovered handlePreQuizModals clicks pre-quiz confirmation modal ('Continue'/'Start attempt')", async () => {
+  const preQuizModal = new MockElement("div", { role: "dialog", class: "rc-Modal" });
+  const heading = new MockElement("h3", {}, "Start attempt");
+  const continueBtn = new MockElement("button", { "data-testid": "continue-button" }, "Continue");
+  preQuizModal.appendChild(heading);
+  preQuizModal.appendChild(continueBtn);
+  mockDocument.body.appendChild(preQuizModal);
+
+  const handled = await handlePreQuizModals();
+  assert.strictEqual(handled, true, "Must handle pre-quiz confirmation modal");
+  assert.strictEqual(continueBtn.clickedTimes, 1, "Must click Continue button");
+  preQuizModal.remove();
+});
+
+runTest("Scenario 1E: handlePreQuizModals NEVER clicks 'Ready to submit?' post-submit modal", async () => {
+  const submitModal = new MockElement("div", { role: "dialog", class: "rc-Modal" });
+  const heading = new MockElement("h2", {}, "Ready to submit?");
+  const submitBtn = new MockElement("button", {}, "Submit");
+  submitModal.appendChild(heading);
+  submitModal.appendChild(submitBtn);
+  mockDocument.body.appendChild(submitModal);
+
+  const handled = await handlePreQuizModals();
+  assert.strictEqual(handled, false, "Must strictly ignore post-submit Ready to submit? modal");
+  assert.strictEqual(submitBtn.clickedTimes, 0, "Submit button must NOT be clicked");
+  submitModal.remove();
 });
 
 // ==================================================================

@@ -3739,6 +3739,45 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     }
 
     /**
+     * Handles pre-quiz confirmation modal dialogs (e.g. "Continue", "Start", "Start attempt").
+     * Recovered from original commit 9de426a.
+     */
+    async function handlePreQuizModals() {
+      const dialogSelectors = [
+        'div[role="dialog"]',
+        'div.rc-Modal',
+        'div.cds-dialog',
+        'div[class*="modal" i]',
+        'div[class*="dialog" i]'
+      ];
+
+      const dialogs = Array.from(document.querySelectorAll(dialogSelectors.join(", ")));
+      for (const dialog of dialogs) {
+        if (!isElementVisible(dialog)) continue;
+        const textContent = (dialog.innerText || dialog.textContent || "").toLowerCase();
+        // Do NOT interact with the post-submit "Ready to submit?" confirmation modal!
+        if (textContent.includes("ready to submit")) continue;
+
+        const buttons = Array.from(dialog.querySelectorAll("button, a.cds-button"));
+        for (const btn of buttons) {
+          if (!isElementVisible(btn)) continue;
+          const text = (btn.innerText || btn.textContent || "").trim();
+          if (
+            /^(continue|start|start\s+attempt|resume|proceed|yes|ok)$/i.test(text) ||
+            btn.getAttribute("data-testid")?.includes("continue") ||
+            btn.getAttribute("data-testid")?.includes("start")
+          ) {
+            console.log(`[QUIZ AUTO] Found pre-quiz modal confirmation button "${text}", clicking...`);
+            btn.click();
+            await sleep(800);
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+
+    /**
      * Finds the Honor Code container section in the assignment DOM (Screenshot 2).
      */
     function findHonorCodeSection() {
@@ -3928,7 +3967,6 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     let autoSolvedAttemptKeys = new Set();
     let isLaunchingAssignment = false;
     let isAttemptStabilizing = false;
-    let assignmentQuestionsObserver = null;
     let pendingAutoSolveTimeout = null;
 
     /**
@@ -3995,10 +4033,6 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       console.log("[Assignment Workflow] Resetting assignment attempt tracking state.");
       autoSolvedAttemptKeys.clear();
       launchedAssignmentPaths.clear();
-      if (assignmentQuestionsObserver) {
-        assignmentQuestionsObserver.disconnect();
-        assignmentQuestionsObserver = null;
-      }
       if (pendingAutoSolveTimeout) {
         clearTimeout(pendingAutoSolveTimeout);
         pendingAutoSolveTimeout = null;
@@ -4080,51 +4114,10 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     }
 
     /**
-     * Attaches a MutationObserver to watch for dynamically loaded assignment questions.
-     */
-    function attachAssignmentQuestionsObserver() {
-      if (assignmentQuestionsObserver) return;
-      if (typeof MutationObserver === "undefined") return;
-
-      const targetNode = document.querySelector("#rendered-content, .rc-AssignmentApp, main, [role='main']") || document.body;
-      if (!targetNode) return;
-
-      console.log("[Assignment Workflow] Watching for dynamically rendered questions via MutationObserver...");
-      let checkTimer = null;
-      assignmentQuestionsObserver = new MutationObserver(() => {
-        if (checkTimer) return;
-        checkTimer = setTimeout(async () => {
-          checkTimer = null;
-          if (hasLoadedAssignmentQuestions()) {
-            console.log("[Assignment Workflow] MutationObserver detected questions loaded in DOM.");
-            if (assignmentQuestionsObserver) {
-              assignmentQuestionsObserver.disconnect();
-              assignmentQuestionsObserver = null;
-            }
-            await triggerAutoSolveIfEligible();
-          }
-        }, 300);
-      });
-
-      assignmentQuestionsObserver.observe(targetNode, {
-        childList: true,
-        subtree: true
-      });
-
-      // Safety timeout to avoid lingering observers
-      setTimeout(() => {
-        if (assignmentQuestionsObserver) {
-          assignmentQuestionsObserver.disconnect();
-          assignmentQuestionsObserver = null;
-        }
-      }, 30000);
-    }
-
-    /**
      * Assignment Launch & Auto Solve Workflow:
      * 1. Detect assignment landing or attempt page.
-     * 2. If on landing page with "Start Assignment", click it automatically and wait 4s.
-     * 3. Wait for questions to finish loading in DOM (via polling and MutationObserver).
+     * 2. If on landing page with "Start Assignment", click it automatically, handle pre-quiz modals, and wait 4s.
+     * 3. On /attempt, enforce 5-second stabilization delay + stability check before extraction.
      * 4. Automatically trigger solveQuiz() for the attempt.
      * 5. Does NOT repeatedly click Start Assignment or restart already solved attempt.
      * 6. Does NOT trigger when navigating between questions in the same attempt.
@@ -4135,10 +4128,6 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       removeAutoSolveDock();
 
       if (!isEligibleAssignmentPage()) {
-        if (assignmentQuestionsObserver) {
-          assignmentQuestionsObserver.disconnect();
-          assignmentQuestionsObserver = null;
-        }
         return;
       }
 
@@ -4186,10 +4175,6 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
 
       // 2. If questions are already active and loaded in DOM (e.g. on /quiz/ or /exam/ page without /attempt in path)
       if (hasLoadedAssignmentQuestions()) {
-        if (assignmentQuestionsObserver) {
-          assignmentQuestionsObserver.disconnect();
-          assignmentQuestionsObserver = null;
-        }
         await waitForQuestionsContentStable(4000);
         await triggerAutoSolveIfEligible();
         return;
@@ -4199,8 +4184,6 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       const startBtn = findAssignmentStartButton();
       if (startBtn) {
         if (launchedAssignmentPaths.has(currentPath)) {
-          // Already launched this attempt path once — wait for questions
-          attachAssignmentQuestionsObserver();
           return;
         }
 
@@ -4214,6 +4197,10 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           startBtn.scrollIntoView({ behavior: "smooth", block: "center" });
           await sleep(250);
           startBtn.click();
+          await sleep(500);
+
+          // Handle any pre-quiz modal confirmation dialog ("Continue" / "Start Attempt")
+          await handlePreQuizModals();
 
           // Wait exactly 4 seconds after navigation / assignment initialization
           console.log("[Assignment Workflow] Waiting exactly 4 seconds after assignment initialization...");
@@ -4232,8 +4219,6 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
 
           if (questionsLoaded) {
             await triggerAutoSolveIfEligible();
-          } else {
-            attachAssignmentQuestionsObserver();
           }
         } catch (err) {
           console.error("[Assignment Workflow] Error launching assignment:", err);
@@ -4241,15 +4226,6 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           isLaunchingAssignment = false;
         }
         return;
-      }
-
-      // 4. Active assessment URL structure without questions loaded yet (loading spinner / hydration)
-      if (
-        currentPath.includes("/exam/") ||
-        currentPath.includes("/quiz/") ||
-        currentPath.includes("/assignment/")
-      ) {
-        attachAssignmentQuestionsObserver();
       }
     }
 
