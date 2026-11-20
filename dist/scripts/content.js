@@ -4171,27 +4171,73 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
      * - Exact and Fuzzy text matching (normalizing nested HTML, whitespace, and punctuation)
      * - Token overlap similarity for long sentence options
      */
-    function matchOptionToAnswer(optInput, optIdx, optCleanText, normalized, totalOptions) {
+    /**
+     * Determines the question selection type based on DOM inputs and prompt semantics.
+     * Native radio buttons enforce single-choice selection regardless of AI output.
+     */
+    function determineQuestionType(questionEl, questionData = null) {
+      if (!questionEl) return "single-choice";
+
+      const inputs = findQuestionOptionInputs(questionEl);
+      const hasRadio = inputs.some(inp => inp.type === "radio" || inp.getAttribute?.("role") === "radio");
+      const hasCheckbox = inputs.some(inp => inp.type === "checkbox" || inp.getAttribute?.("role") === "checkbox");
+
+      // Native radio buttons strictly enforce single selection in HTML forms
+      if (hasRadio && !hasCheckbox) {
+        return "single-choice";
+      }
+
+      // Checkboxes indicate multiple-choice questions
+      if (hasCheckbox && !hasRadio) {
+        return "multiple-choice";
+      }
+
+      // If mixed or semantic ARIA controls, analyze prompt text
+      const promptText = ((questionData?.question || "") + " " + (questionEl.textContent || "")).toLowerCase();
+      if (/\b(select\s+all|choose\s+all|check\s+all|all\s+that\s+apply|more\s+than\s+one|which\s+of\s+the\s+following\s+are)\b/i.test(promptText)) {
+        return "multiple-choice";
+      }
+
+      return hasCheckbox ? "multiple-choice" : "single-choice";
+    }
+
+    /**
+     * Purges stale AI recommendation badges and styling from prior solver passes.
+     */
+    function cleanStaleRecommendationBadges(questionEl) {
+      if (!questionEl) return;
+      questionEl.querySelectorAll(".coursera-ai-tag, .coursera-verification-tag").forEach(el => el.remove());
+      questionEl.querySelectorAll(".coursera-suggested-choice").forEach(el => el.classList.remove("coursera-suggested-choice"));
+      questionEl.querySelectorAll(".coursera-needs-verification").forEach(el => el.classList.remove("coursera-needs-verification"));
+      questionEl.classList.remove("coursera-needs-verification");
+    }
+
+    /**
+     * Evaluates continuous match affinity (0-100) between an option element and normalized AI response.
+     */
+    function scoreOptionMatch(optInput, optIdx, optCleanText, normalized, totalOptions) {
       if (isAcademicIntegrityDeclaration(optInput)) {
-        return false;
+        return 0;
       }
 
-      // 1. Explicit Index match
+      let maxScore = 0;
+
+      // 1. Explicit Index match (Score: 100)
       if (normalized.indices.includes(optIdx)) {
-        return true;
+        maxScore = Math.max(maxScore, 100);
       }
 
-      // 2. Explicit Letter match
+      // 2. Explicit Letter match (Score: 95)
       const optLetterPrefix = optCleanText.match(/^(?:option\s+)?\(?([A-Z])[\.\)\:\s]/i);
       const optLetter = optLetterPrefix
         ? optLetterPrefix[1].toUpperCase()
         : String.fromCharCode(65 + optIdx);
 
       if (normalized.letters.includes(optLetter)) {
-        return true;
+        maxScore = Math.max(maxScore, 95);
       }
 
-      // 3. Text-based match (Exact and Fuzzy with nested HTML cleanup)
+      // 3. Text-based match
       if (normalized.texts.length > 0 && optCleanText) {
         const normOpt = optCleanText.toLowerCase()
           .replace(/^(?:option\s+)?\(?[a-z][\.\)\:\s]\s*/i, "")
@@ -4209,32 +4255,46 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
 
           if (!normOpt || !normCt) continue;
 
-          // Exact match
-          if (normOpt === normCt) return true;
-
-          // Substring match
-          if (normCt.length >= 6 && normOpt.includes(normCt)) return true;
-          if (normOpt.length >= 6 && normCt.includes(normOpt)) return true;
-
-          // Short answer keywords (e.g. "true", "false", "yes", "no")
-          if ((normCt === "true" || normCt === "false" || normCt === "yes" || normCt === "no") && normOpt === normCt) {
-            return true;
+          // Exact match (Score: 90)
+          if (normOpt === normCt) {
+            maxScore = Math.max(maxScore, 90);
+            continue;
           }
 
-          // Significant token overlap for long sentences with nested tags
+          // Substring match (Score: 75)
+          if ((normCt.length >= 6 && normOpt.includes(normCt)) || (normOpt.length >= 6 && normCt.includes(normOpt))) {
+            maxScore = Math.max(maxScore, 75);
+            continue;
+          }
+
+          // Short answer keywords (Score: 85)
+          if ((normCt === "true" || normCt === "false" || normCt === "yes" || normCt === "no") && normOpt === normCt) {
+            maxScore = Math.max(maxScore, 85);
+            continue;
+          }
+
+          // Token overlap for long sentences (Score: 40-70)
           const optTokens = normOpt.split(" ").filter(w => w.length > 3);
           const ctTokens = normCt.split(" ").filter(w => w.length > 3);
           if (optTokens.length >= 3 && ctTokens.length >= 3) {
             const common = optTokens.filter(t => ctTokens.includes(t));
             const overlapRatio = common.length / Math.min(optTokens.length, ctTokens.length);
             if (overlapRatio >= 0.75) {
-              return true;
+              const score = Math.round(40 + overlapRatio * 30);
+              maxScore = Math.max(maxScore, score);
             }
           }
         }
       }
 
-      return false;
+      return maxScore;
+    }
+
+    /**
+     * Backward-compatible boolean helper for single option match.
+     */
+    function matchOptionToAnswer(optInput, optIdx, optCleanText, normalized, totalOptions) {
+      return scoreOptionMatch(optInput, optIdx, optCleanText, normalized, totalOptions) >= 50;
     }
 
     /**
@@ -4365,12 +4425,99 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     }
 
     /**
+     * Resolves AI answers into a structured recommendation model enforcing single vs multiple-choice constraints.
+     */
+    function resolveQuestionRecommendations(questionEl, answer, visibleOptions) {
+      const questionType = determineQuestionType(questionEl);
+      const normalized = normalizeQuizAnswer(answer, visibleOptions.length);
+
+      const scoredOptions = visibleOptions.map((optInput, optIdx) => {
+        if (isAcademicIntegrityDeclaration(optInput)) {
+          return { optInput, optIdx, optCleanText: "", score: 0 };
+        }
+        const label = optInput.closest("label") ||
+                      (optInput.id ? document.querySelector(`label[for="${optInput.id}"]`) : null) ||
+                      optInput.parentElement;
+        const optCleanText = label ? getCleanVisibleText(label) : "";
+        const score = scoreOptionMatch(optInput, optIdx, optCleanText, normalized, visibleOptions.length);
+        return { optInput, optIdx, optCleanText, score };
+      });
+
+      let recommendedOptionIndexes = [];
+      let confidence = 0;
+      let needsVerification = false;
+
+      if (questionType === "single-choice") {
+        // Filter options that have meaningful match (>= 40)
+        const candidates = scoredOptions.filter(o => o.score >= 40).sort((a, b) => b.score - a.score);
+
+        if (candidates.length === 0) {
+          needsVerification = true;
+          confidence = 0;
+        } else if (candidates.length === 1) {
+          recommendedOptionIndexes = [candidates[0].optIdx];
+          confidence = candidates[0].score / 100;
+          needsVerification = confidence < 0.5;
+        } else {
+          // Multiple candidates found for a SINGLE-CHOICE question!
+          // Check if top candidate is clearly superior (score diff >= 15)
+          const topScore = candidates[0].score;
+          const runnerUpScore = candidates[1].score;
+
+          if (topScore - runnerUpScore >= 15) {
+            recommendedOptionIndexes = [candidates[0].optIdx];
+            confidence = topScore / 100;
+            needsVerification = false;
+          } else {
+            // Ambiguous tie or multiple candidate answers returned for single-choice!
+            // Enforce limit: pick top candidate tentatively, but flag verification required!
+            recommendedOptionIndexes = [candidates[0].optIdx];
+            confidence = topScore / 100;
+            needsVerification = true;
+          }
+        }
+      } else {
+        // Multiple-choice question
+        const matched = scoredOptions.filter(o => o.score >= 50);
+        if (matched.length === 0) {
+          needsVerification = true;
+          confidence = 0;
+        } else {
+          recommendedOptionIndexes = matched.map(m => m.optIdx);
+          confidence = Math.max(...matched.map(m => m.score)) / 100;
+          needsVerification = false;
+        }
+      }
+
+      // Validate indices: in-bounds, unique, positive
+      recommendedOptionIndexes = Array.from(new Set(recommendedOptionIndexes))
+        .filter(idx => typeof idx === "number" && idx >= 0 && idx < visibleOptions.length);
+
+      // Invariant: single-choice MUST NEVER have > 1 recommendation
+      if (questionType === "single-choice" && recommendedOptionIndexes.length > 1) {
+        recommendedOptionIndexes = [recommendedOptionIndexes[0]];
+      }
+
+      return {
+        questionId: questionEl.id || questionEl.getAttribute("data-testid") || "question",
+        questionType,
+        recommendedOptionIndexes,
+        confidence,
+        explanation: answer?.explanation || "",
+        needsVerification
+      };
+    }
+
+    /**
      * Applies answers to a single question container in the DOM.
      * Selects matching checkboxes/radios, unchecks non-matching checkboxes,
      * adds visual recommendation badges, and verifies DOM persistence.
      */
     async function applyQuestionAnswers(questionEl, answer) {
       if (!questionEl || !answer) return { markedCount: 0, verified: false };
+
+      // Clean up any stale badges or indicators from prior passes
+      cleanStaleRecommendationBadges(questionEl);
 
       let markedCount = 0;
 
@@ -4402,8 +4549,19 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         return { markedCount: 0, verified: false };
       }
 
-      const normalized = normalizeQuizAnswer(answer, visibleOptions.length);
-      const isMultiSelect = visibleOptions.some(opt => opt.type === "checkbox" || opt.getAttribute("role") === "checkbox");
+      const rec = resolveQuestionRecommendations(questionEl, answer, visibleOptions);
+      const isMultiSelect = rec.questionType === "multiple-choice";
+
+      // If ambiguous or low-confidence single-choice, render Needs Verification tag on the container or choice
+      if (rec.needsVerification) {
+        const header = questionEl.querySelector('h2, h3, [class*="Prompt"], legend, div[role="heading"]') || questionEl;
+        if (header && !header.querySelector(".coursera-verification-tag")) {
+          const vTag = document.createElement("span");
+          vTag.className = "coursera-verification-tag";
+          vTag.textContent = "Needs verification ⚠️";
+          header.appendChild(vTag);
+        }
+      }
 
       for (let optIdx = 0; optIdx < visibleOptions.length; optIdx++) {
         const optInput = visibleOptions[optIdx];
@@ -4412,15 +4570,10 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           continue;
         }
 
-        const label = optInput.closest("label") ||
-                      (optInput.id ? document.querySelector(`label[for="${optInput.id}"]`) : null) ||
-                      optInput.parentElement;
-        const optCleanText = label ? getCleanVisibleText(label) : "";
-
-        const isMatch = matchOptionToAnswer(optInput, optIdx, optCleanText, normalized, visibleOptions.length);
+        const isRecommended = rec.recommendedOptionIndexes.includes(optIdx);
 
         if (isMultiSelect) {
-          if (isMatch) {
+          if (isRecommended) {
             const success = await setInputChecked(optInput, true);
             if (success) markedCount++;
           } else {
@@ -4429,16 +4582,20 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           }
         } else {
           // Single-choice radio
-          if (isMatch) {
+          if (isRecommended) {
             const success = await setInputChecked(optInput, true);
             if (success) markedCount++;
           }
         }
 
         // Visual feedback & recommendation badge
+        const label = optInput.closest("label") ||
+                      (optInput.id ? document.querySelector(`label[for="${optInput.id}"]`) : null) ||
+                      optInput.parentElement;
         const choiceBox = label || optInput.parentElement;
+
         if (choiceBox) {
-          if (isMatch) {
+          if (isRecommended) {
             choiceBox.classList.add("coursera-suggested-choice");
             let tag = choiceBox.querySelector(".coursera-ai-tag");
             if (!tag) {
@@ -4457,7 +4614,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
 
       // Verify DOM state: check whether any option in this question is actually checked
       const anyCheckedInDOM = visibleOptions.some(opt => opt.checked || opt.getAttribute("aria-checked") === "true");
-      return { markedCount, verified: anyCheckedInDOM };
+      return { markedCount, verified: anyCheckedInDOM, recommendation: rec };
     }
 
     /**
