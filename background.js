@@ -705,6 +705,9 @@
 
     if (request.action === "QUIZ_PROGRESS") {
       latestQuizProgress = request.payload;
+      try {
+        chrome.runtime.sendMessage(request).catch(() => {});
+      } catch (_) {}
       sendResponse({ received: true });
       return true;
     }

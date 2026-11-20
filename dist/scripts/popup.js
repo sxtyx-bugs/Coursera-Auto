@@ -164,6 +164,21 @@
               statusEl.style.color = "#10b981";
             }
           }
+
+          // Check if a quiz solve is currently active or recently completed
+          chrome.runtime.sendMessage({ action: "GET_QUIZ_PROGRESS" }, (progRes) => {
+            if (chrome.runtime.lastError || !progRes || !progRes.payload) return;
+            const prog = progRes.payload;
+            if (statusEl) {
+              if (prog.state === "solving" || prog.state === "filling_answers" || prog.state === "loading_questions") {
+                statusEl.textContent = prog.message || "Solving active quiz...";
+                statusEl.style.color = "#0284c7";
+              } else if (prog.state === "completed" && prog.message) {
+                statusEl.textContent = prog.message;
+                statusEl.style.color = "#10b981";
+              }
+            }
+          });
           return;
         }
 
@@ -647,10 +662,17 @@
         statusEl.style.color = "#0f172a";
       }
 
-      sendTabAction("quiz", (err) => {
-        if (err && statusEl) {
-          statusEl.textContent = err;
-          statusEl.style.color = "#ef4444";
+      sendTabAction("quiz", (err, res) => {
+        if (err) {
+          if (statusEl) {
+            statusEl.textContent = err;
+            statusEl.style.color = "#ef4444";
+          }
+        } else if (res && res.result) {
+          if (statusEl) {
+            statusEl.textContent = res.result.message || "✓ Quiz processing completed.";
+            statusEl.style.color = res.result.ok !== false ? "#10b981" : "#ef4444";
+          }
         }
       });
 
@@ -705,6 +727,42 @@
   }
 
   /**
+   * 5. Real-time Solver Progress Broadcast Listener
+   */
+  function initProgressBroadcastListener() {
+    chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+      if (msg.action === "QUIZ_PROGRESS") {
+        const payload = msg.payload || {};
+        const statusEl = document.getElementById("key-status");
+        if (statusEl) {
+          if (payload.state === "completed") {
+            statusEl.textContent = payload.message || "✓ All questions filled & verified. Please review & submit.";
+            statusEl.style.color = "#10b981";
+          } else if (payload.state === "error") {
+            statusEl.textContent = `✗ ${payload.message || "Quiz solver error"}`;
+            statusEl.style.color = "#ef4444";
+          } else if (payload.state === "filling_answers") {
+            statusEl.textContent = payload.message || `Applying answers (${payload.model || ""})...`;
+            statusEl.style.color = "#0284c7";
+          } else if (payload.state === "solving") {
+            statusEl.textContent = payload.message || `Reasoning with AI (${payload.model || ""})...`;
+            statusEl.style.color = "#0284c7";
+          } else if (payload.state === "loading_questions") {
+            statusEl.textContent = payload.message || "Discovering assignment questions...";
+            statusEl.style.color = "#0284c7";
+          } else if (payload.state === "starting") {
+            statusEl.textContent = payload.message || "Preparing solver...";
+            statusEl.style.color = "#0f172a";
+          }
+        }
+        sendResponse({ received: true });
+        return true;
+      }
+      return undefined;
+    });
+  }
+
+  /**
    * Master initialization runner
    */
   function initAll() {
@@ -712,6 +770,7 @@
     initAiSettings();
     loadUserProfile();
     initSettingsButton();
+    initProgressBroadcastListener();
     initConnectionHandshake();
   }
 

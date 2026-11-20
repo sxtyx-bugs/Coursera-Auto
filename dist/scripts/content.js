@@ -1664,9 +1664,7 @@
             json: async () => JSON.parse(bgRes.text)
           };
         } catch (bgErr) {
-          if (typeof window !== "undefined" && window?.location?.hostname?.includes("coursera.org")) {
-            throw bgErr;
-          }
+          throw bgErr;
         }
       }
 
@@ -1782,7 +1780,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       constructor(config = {}) {
         this.id = "groq";
         this.displayName = "Groq";
-        this.apiKey = config.apiKey || "";
+        this.apiKey = (config.apiKey || "").trim();
         this.model = config.model || "llama-3.3-70b-versatile";
         this.enabled = config.enabled !== undefined ? config.enabled : true;
         this.baseUrl = "https://api.groq.com/openai/v1/chat/completions";
@@ -1797,9 +1795,10 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         return str.split(this.apiKey).join("[REDACTED_GROQ_KEY]");
       }
 
-      async solve(questions, timeoutMs = 25000) {
+      async solve(questions, timeoutMs = 25000, onLog) {
+        let activeModel = this.getModel();
         const payload = {
-          model: this.getModel(),
+          model: activeModel,
           messages: [
             { role: "system", content: SYSTEM_PROMPT },
             { role: "user", content: `Assessment Questions:\n${JSON.stringify(questions, null, 2)}` }
@@ -1808,7 +1807,11 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           response_format: { type: "json_object" }
         };
 
-        const res = await performAiProxyRequest(
+        if (typeof onLog === "function") {
+          onLog("request_dispatched", { provider: this.displayName, model: activeModel });
+        }
+
+        let res = await performAiProxyRequest(
           this.baseUrl,
           {
             method: "POST",
@@ -1821,6 +1824,38 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           timeoutMs
         );
 
+        if (typeof onLog === "function") {
+          onLog("response_received", { provider: this.displayName, status: res.status });
+        }
+
+        // Handle 404 / 400 model deprecation fallback
+        if (!res.ok && (res.status === 404 || res.status === 400)) {
+          const errText = await res.text();
+          if (/model.*(?:not found|deprecated|decommissioned|does not exist)/i.test(errText)) {
+            const fallbackModel = activeModel.includes("70b") ? "llama-3.1-8b-instant" : "llama-3.3-70b-versatile";
+            if (fallbackModel !== activeModel) {
+              console.warn(`[Groq] Model ${activeModel} unavailable (${res.status}). Retrying with fallback: ${fallbackModel}...`);
+              activeModel = fallbackModel;
+              payload.model = activeModel;
+              res = await performAiProxyRequest(
+                this.baseUrl,
+                {
+                  method: "POST",
+                  headers: {
+                    "Authorization": `Bearer ${this.apiKey}`,
+                    "Content-Type": "application/json"
+                  },
+                  body: JSON.stringify(payload)
+                },
+                timeoutMs
+              );
+              if (typeof onLog === "function") {
+                onLog("response_received", { provider: this.displayName, status: res.status, fallbackModel });
+              }
+            }
+          }
+        }
+
         if (!res.ok) {
           const errText = await res.text();
           let msg = "";
@@ -1832,13 +1867,20 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           }
           const err = new Error(`Groq HTTP ${res.status}: ${this.maskApiKey(msg)}`);
           err.status = res.status;
-          err.isAuthError = res.status === 401 || res.status === 403;
+          err.isAuthError = res.status === 401 || res.status === 403 || /invalid api key|invalid_api_key/i.test(msg);
+          err.isRateLimit = res.status === 429 || /rate limit|quota/i.test(msg);
           throw err;
         }
 
         const data = await res.json();
         const rawContent = data.choices?.[0]?.message?.content;
-        return parseAIResponse(rawContent);
+        const parsedAnswers = parseAIResponse(rawContent);
+
+        if (typeof onLog === "function") {
+          onLog("response_parsed", { provider: this.displayName, count: parsedAnswers.length });
+        }
+
+        return parsedAnswers;
       }
     }
 
@@ -1846,7 +1888,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       constructor(config = {}) {
         this.id = "cerebras";
         this.displayName = "Cerebras";
-        this.apiKey = config.apiKey || "";
+        this.apiKey = (config.apiKey || "").trim();
         this.model = config.model || "llama3.3-70b";
         this.enabled = config.enabled !== undefined ? config.enabled : true;
         this.baseUrl = "https://api.cerebras.ai/v1/chat/completions";
@@ -1861,7 +1903,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         return str.split(this.apiKey).join("[REDACTED_CEREBRAS_KEY]");
       }
 
-      async solve(questions, timeoutMs = 25000) {
+      async solve(questions, timeoutMs = 25000, onLog) {
         const payload = {
           model: this.getModel(),
           messages: [
@@ -1871,6 +1913,10 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           temperature: 0.1,
           response_format: { type: "json_object" }
         };
+
+        if (typeof onLog === "function") {
+          onLog("request_dispatched", { provider: this.displayName, model: this.getModel() });
+        }
 
         const res = await performAiProxyRequest(
           this.baseUrl,
@@ -1884,6 +1930,10 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           },
           timeoutMs
         );
+
+        if (typeof onLog === "function") {
+          onLog("response_received", { provider: this.displayName, status: res.status });
+        }
 
         if (!res.ok) {
           const errText = await res.text();
@@ -1902,7 +1952,13 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
 
         const data = await res.json();
         const rawContent = data.choices?.[0]?.message?.content;
-        return parseAIResponse(rawContent);
+        const parsedAnswers = parseAIResponse(rawContent);
+
+        if (typeof onLog === "function") {
+          onLog("response_parsed", { provider: this.displayName, count: parsedAnswers.length });
+        }
+
+        return parsedAnswers;
       }
     }
 
@@ -1910,7 +1966,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       constructor(config = {}) {
         this.id = "openrouter";
         this.displayName = "OpenRouter";
-        this.apiKey = config.apiKey || "";
+        this.apiKey = (config.apiKey || "").trim();
         this.model = config.model || "meta-llama/llama-3.3-70b-instruct:free";
         this.enabled = config.enabled !== undefined ? config.enabled : true;
         this.baseUrl = "https://openrouter.ai/api/v1/chat/completions";
@@ -1925,7 +1981,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         return str.split(this.apiKey).join("[REDACTED_OPENROUTER_KEY]");
       }
 
-      async solve(questions, timeoutMs = 25000) {
+      async solve(questions, timeoutMs = 25000, onLog) {
         const payload = {
           model: this.getModel(),
           messages: [
@@ -1934,6 +1990,10 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           ],
           temperature: 0.1
         };
+
+        if (typeof onLog === "function") {
+          onLog("request_dispatched", { provider: this.displayName, model: this.getModel() });
+        }
 
         const res = await performAiProxyRequest(
           this.baseUrl,
@@ -1949,6 +2009,10 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           },
           timeoutMs
         );
+
+        if (typeof onLog === "function") {
+          onLog("response_received", { provider: this.displayName, status: res.status });
+        }
 
         if (!res.ok) {
           const errText = await res.text();
@@ -1967,7 +2031,13 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
 
         const data = await res.json();
         const rawContent = data.choices?.[0]?.message?.content;
-        return parseAIResponse(rawContent);
+        const parsedAnswers = parseAIResponse(rawContent);
+
+        if (typeof onLog === "function") {
+          onLog("response_parsed", { provider: this.displayName, count: parsedAnswers.length });
+        }
+
+        return parsedAnswers;
       }
     }
 
@@ -1975,7 +2045,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       constructor(config = {}) {
         this.id = "nvidia";
         this.displayName = "NVIDIA NIM";
-        this.apiKey = config.apiKey || "";
+        this.apiKey = (config.apiKey || "").trim();
         this.model = config.model || "meta/llama-3.3-70b-instruct";
         this.enabled = config.enabled !== undefined ? config.enabled : true;
         this.baseUrl = "https://integrate.api.nvidia.com/v1/chat/completions";
@@ -1990,7 +2060,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         return str.split(this.apiKey).join("[REDACTED_NVIDIA_KEY]");
       }
 
-      async solve(questions, timeoutMs = 25000) {
+      async solve(questions, timeoutMs = 25000, onLog) {
         const payload = {
           model: this.getModel(),
           messages: [
@@ -1999,6 +2069,10 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           ],
           temperature: 0.1
         };
+
+        if (typeof onLog === "function") {
+          onLog("request_dispatched", { provider: this.displayName, model: this.getModel() });
+        }
 
         const res = await performAiProxyRequest(
           this.baseUrl,
@@ -2012,6 +2086,10 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           },
           timeoutMs
         );
+
+        if (typeof onLog === "function") {
+          onLog("response_received", { provider: this.displayName, status: res.status });
+        }
 
         if (!res.ok) {
           const errText = await res.text();
@@ -2030,7 +2108,13 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
 
         const data = await res.json();
         const rawContent = data.choices?.[0]?.message?.content;
-        return parseAIResponse(rawContent);
+        const parsedAnswers = parseAIResponse(rawContent);
+
+        if (typeof onLog === "function") {
+          onLog("response_parsed", { provider: this.displayName, count: parsedAnswers.length });
+        }
+
+        return parsedAnswers;
       }
     }
 
@@ -2038,7 +2122,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       constructor(config = {}) {
         this.id = "deepseek";
         this.displayName = "DeepSeek";
-        this.apiKey = config.apiKey || "";
+        this.apiKey = (config.apiKey || "").trim();
         this.model = config.model || "deepseek-chat";
         this.enabled = config.enabled !== undefined ? config.enabled : true;
         this.baseUrl = "https://api.deepseek.com/chat/completions";
@@ -2053,7 +2137,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         return str.split(this.apiKey).join("[REDACTED_DEEPSEEK_KEY]");
       }
 
-      async solve(questions, timeoutMs = 25000) {
+      async solve(questions, timeoutMs = 25000, onLog) {
         const payload = {
           model: this.getModel(),
           messages: [
@@ -2063,6 +2147,10 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           temperature: 0.1,
           response_format: { type: "json_object" }
         };
+
+        if (typeof onLog === "function") {
+          onLog("request_dispatched", { provider: this.displayName, model: this.getModel() });
+        }
 
         const res = await performAiProxyRequest(
           this.baseUrl,
@@ -2076,6 +2164,10 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           },
           timeoutMs
         );
+
+        if (typeof onLog === "function") {
+          onLog("response_received", { provider: this.displayName, status: res.status });
+        }
 
         if (!res.ok) {
           const errText = await res.text();
@@ -2094,7 +2186,13 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
 
         const data = await res.json();
         const rawContent = data.choices?.[0]?.message?.content;
-        return parseAIResponse(rawContent);
+        const parsedAnswers = parseAIResponse(rawContent);
+
+        if (typeof onLog === "function") {
+          onLog("response_parsed", { provider: this.displayName, count: parsedAnswers.length });
+        }
+
+        return parsedAnswers;
       }
     }
 
@@ -2102,7 +2200,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       constructor(config = {}) {
         this.id = "gemini";
         this.displayName = "Google Gemini";
-        this.apiKey = config.apiKey || "";
+        this.apiKey = (config.apiKey || "").trim();
         this.model = GeminiProvider.normalizeModelName(config.model || "gemini-2.0-flash");
         this.enabled = config.enabled !== undefined ? config.enabled : true;
         this.baseUrl = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -2128,7 +2226,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         return str.split(this.apiKey).join("[REDACTED_GEMINI_KEY]");
       }
 
-      async solve(questions, timeoutMs = 25000) {
+      async solve(questions, timeoutMs = 25000, onLog) {
         let activeModel = this.getModel();
         let endpoint = `${this.baseUrl}/${activeModel}:generateContent`;
         let url = `${endpoint}?key=${encodeURIComponent(this.apiKey)}`;
@@ -2142,6 +2240,10 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           }
         });
 
+        if (typeof onLog === "function") {
+          onLog("request_dispatched", { provider: this.displayName, model: activeModel });
+        }
+
         let res = await performAiProxyRequest(
           url,
           {
@@ -2151,6 +2253,10 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           },
           timeoutMs
         );
+
+        if (typeof onLog === "function") {
+          onLog("response_received", { provider: this.displayName, status: res.status });
+        }
 
         // If 404 model not found, try fallback models
         if (!res.ok && res.status === 404) {
@@ -2168,6 +2274,9 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
               },
               timeoutMs
             );
+            if (typeof onLog === "function") {
+              onLog("response_received", { provider: this.displayName, status: res.status, fallbackModel: activeModel });
+            }
             if (res.ok) break;
           }
         }
@@ -2183,13 +2292,23 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           }
           const err = new Error(`Gemini HTTP ${res.status}: ${this.maskApiKey(msg)}`);
           err.status = res.status;
-          err.isAuthError = res.status === 401 || res.status === 403;
+          err.isAuthError = res.status === 401 || res.status === 403 || /api_key_invalid|invalid_argument.*key|api key not valid/i.test(msg);
+          err.isRateLimit = res.status === 429 || /resource_exhausted|quota/i.test(msg);
           throw err;
         }
 
         const data = await res.json();
+        if (data.promptFeedback?.blockReason) {
+          throw new Error(`Gemini blocked prompt due to: ${data.promptFeedback.blockReason}`);
+        }
         const rawContent = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        return parseAIResponse(rawContent);
+        const parsedAnswers = parseAIResponse(rawContent);
+
+        if (typeof onLog === "function") {
+          onLog("response_parsed", { provider: this.displayName, count: parsedAnswers.length });
+        }
+
+        return parsedAnswers;
       }
     }
 
@@ -2339,13 +2458,13 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         }
       }
 
-      async solveQuestions(questions, onProgress) {
+      async solveQuestions(questions, onProgress, solverStartTime) {
         if (this.inFlightPromise) {
           console.log("[AI Fallback] Joining existing in-flight question solving promise...");
           return this.inFlightPromise;
         }
 
-        this.inFlightPromise = this._executeSolve(questions, onProgress);
+        this.inFlightPromise = this._executeSolve(questions, onProgress, solverStartTime);
         try {
           const res = await this.inFlightPromise;
           return res;
@@ -2354,7 +2473,10 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         }
       }
 
-      async _executeSolve(questions, onProgress) {
+      async _executeSolve(questions, onProgress, solverStartTime) {
+        const baseStartTime = solverStartTime || Date.now();
+        const solverTimestamp = () => `[${new Date().toISOString()}] (+${Date.now() - baseStartTime}ms)`;
+
         this.sanitizeCache();
         const cacheKey = this.getCacheKey(questions);
         if (cacheKey && this.cache.has(cacheKey)) {
@@ -2366,7 +2488,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
             cached.answers.every((a, idx) => a && (a.selectedOptionIndexes || a.selectedOptionText || a.content || questions[idx].type === "text"));
 
           if (isValidCached) {
-            console.log("[AI Fallback] Exact matching question set found in cache. Serving from cache.");
+            console.log(`[AI Fallback] ${solverTimestamp()} Exact matching question set found in cache. Serving from cache.`);
             if (typeof onProgress === "function") {
               onProgress({
                 providerName: cached.providerName,
@@ -2419,6 +2541,8 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
             });
           }
 
+          console.log(`[Provider] ${solverTimestamp()} Selected: ${provider.displayName}/${provider.getModel()}`);
+
           try {
             console.log(`[AI Fallback] Invoking ${provider.displayName} (model: ${provider.getModel()})...`);
 
@@ -2428,9 +2552,19 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
               options: Array.isArray(q.options)
                 ? q.options.map(opt => sanitizeCourseraPromptInjection(opt || ""))
                 : q.options
-            }));
+            })).filter(q => q.question && q.question.trim().length > 0);
 
-            const answers = await provider.solve(sanitizedQuestions, this.timeoutMs);
+            const onLog = (stage, detail) => {
+              if (stage === "request_dispatched") {
+                console.log(`[Provider] ${solverTimestamp()} Request dispatched`);
+              } else if (stage === "response_received") {
+                console.log(`[Provider] ${solverTimestamp()} Response received: HTTP ${detail.status}`);
+              } else if (stage === "response_parsed") {
+                console.log(`[Provider] ${solverTimestamp()} Response parsed`);
+              }
+            };
+
+            const answers = await provider.solve(sanitizedQuestions, this.timeoutMs, onLog);
 
             if (!Array.isArray(answers) || answers.length === 0) {
               throw new Error("Provider returned empty answer array");
@@ -3892,7 +4026,29 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         };
       }
 
-      // 2. Supplementary / Reading / Lecture / Discussion / Coach routes
+      // 2. Active Assignment Attempt routes (Takes precedence over general media presence)
+      // Confirmed active attempt requires explicit attempt route structure
+      const isExplicitAttempt =
+        pathname.endsWith("/attempt") ||
+        pathname.includes("/attempt/") ||
+        (pathname.includes("/assignment-submission/") && pathname.includes("/attempt")) ||
+        (pathname.includes("/exam/") && pathname.includes("/attempt")) ||
+        (pathname.includes("/quiz/") && pathname.includes("/attempt")) ||
+        (pathname.includes("/assignment/") && pathname.includes("/attempt"));
+
+      if (isExplicitAttempt) {
+        return {
+          type: "active-attempt",
+          isAttempt: true,
+          isLanding: false,
+          isFeedback: false,
+          isSupplement: false,
+          isOther: false,
+          pathname
+        };
+      }
+
+      // 3. Supplementary / Reading / Lecture / Discussion / Coach routes
       const isSupplement =
         pathname.includes("/supplement/") ||
         pathname.endsWith("/supplement") ||
@@ -3916,7 +4072,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         };
       }
 
-      // Check if lecture video or reading item is currently on screen
+      // Check if lecture video or reading item is currently on screen (only for non-attempt pages)
       if (typeof document !== "undefined" && document.querySelector('video, .rc-VideoPlayer, div[data-testid="video-player"], .rc-ReadingItem, div[data-testid="reading-content"]')) {
         return {
           type: "supplement",
@@ -3924,28 +4080,6 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           isLanding: false,
           isFeedback: false,
           isSupplement: true,
-          isOther: false,
-          pathname
-        };
-      }
-
-      // 3. Active Assignment Attempt routes
-      // Confirmed active attempt requires explicit attempt route structure
-      const isExplicitAttempt =
-        pathname.endsWith("/attempt") ||
-        pathname.includes("/attempt/") ||
-        (pathname.includes("/assignment-submission/") && pathname.includes("/attempt")) ||
-        (pathname.includes("/exam/") && pathname.includes("/attempt")) ||
-        (pathname.includes("/quiz/") && pathname.includes("/attempt")) ||
-        (pathname.includes("/assignment/") && pathname.includes("/attempt"));
-
-      if (isExplicitAttempt) {
-        return {
-          type: "active-attempt",
-          isAttempt: true,
-          isLanding: false,
-          isFeedback: false,
-          isSupplement: false,
           isOther: false,
           pathname
         };
@@ -3995,6 +4129,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     function isEligibleAssignmentPage() {
       const route = classifyCourseraRoute();
       console.log(`[Route] Page classified: ${route.type} ("${route.pathname}")`);
+      console.log(`[Coursera Extension] Assignment page detected: ${route.type} ("${route.pathname}")`);
       return route.isAttempt || route.isLanding;
     }
 
@@ -4489,7 +4624,11 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       pendingAutoSolveTimeout = setTimeout(async () => {
         pendingAutoSolveTimeout = null;
         if (!isSolvingQuiz) {
-          await solveQuiz();
+          const res = await solveQuiz();
+          if (res && res.ok === false) {
+            console.warn(`[Assignment Workflow] Solver failed (${res.message}). Releasing attempt key ${attemptKey} to allow retry.`);
+            autoSolvedAttemptKeys.delete(attemptKey);
+          }
         }
       }, 500);
     }
@@ -4510,6 +4649,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
 
       const route = classifyCourseraRoute();
       console.log(`[Route] Page classified: ${route.type} ("${route.pathname}")`);
+      console.log(`[Coursera Extension] Assignment page detected: ${route.type} ("${route.pathname}")`);
 
       if (!route.isAttempt && !route.isLanding) {
         console.log(`[Workflow] Solver not triggered: inactive attempt (${route.type})`);
@@ -4695,17 +4835,25 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
      * - Never automatically submits graded work. User must personally review and click Submit.
      */
     async function solveQuiz() {
-      if (isSolvingQuiz) return;
+      if (isSolvingQuiz) {
+        console.warn("[Solver] solveQuiz invocation skipped: solveQuiz is already active.");
+        return { ok: false, message: "Solver already in progress" };
+      }
+
+      const solverStartTime = Date.now();
+      const solverTimestamp = () => `[${new Date().toISOString()}] (+${Date.now() - solverStartTime}ms)`;
+      console.log(`[Solver] ${solverTimestamp()} Started`);
 
       const route = typeof classifyCourseraRoute === "function" ? classifyCourseraRoute() : { isAttempt: true, isFeedback: false, isSupplement: false, isOther: false, pathname: window.location.pathname };
       console.log(`[Route] Page classified: ${route.type} ("${route.pathname}")`);
 
       if (route.isFeedback || route.isSupplement || route.isOther) {
+        const msg = `Quiz solver is only available on active assignment attempts (current page: ${route.type}).`;
         console.warn(`[Workflow] Solver not triggered: inactive attempt (${route.type}) on path "${route.pathname}"`);
         if (typeof showToast === "function") {
-          showToast(`Quiz solver is only available on active assignment attempts (current page: ${route.type}).`, "warning");
+          showToast(msg, "warning");
         }
-        return;
+        return { ok: false, message: msg };
       }
 
       if (route.isLanding) {
@@ -4713,11 +4861,9 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         if (startBtn) {
           console.log("[AI Solver] Start Assignment button present on landing page. Triggering assignment launch...");
           await checkAndHandleAssignmentLaunch();
-          return;
+          return { ok: true, message: "Assignment launch initiated" };
         }
       }
-
-      isSolvingQuiz = true;
 
       const triggerBtn = document.getElementById("coursera-auto-solve-trigger");
       if (triggerBtn) {
@@ -4725,18 +4871,34 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         triggerBtn.textContent = "Solving Assignment...";
       }
 
-      updateDockStatus("Preparing AI reasoning engine...", "info");
-      notifyQuizProgress("starting", { message: "Preparing AI reasoning engine..." });
+      isSolvingQuiz = true;
 
       try {
+        notifyQuizProgress("starting", { message: "Preparing AI reasoning engine..." });
+
+        // Refresh configuration from storage to avoid stale provider/key state
+        await new Promise((resolve) => {
+          if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+            chrome.storage.local.get([
+              "activeProvider", "providerPriority", "providersConfig",
+              "groqApiKey", "nvidiaApiKey", "deepseekApiKey", "openrouterApiKey",
+              "key", "geminiApiKey", "cerebrasApiKey", "model", "aiTimeoutLimit", "quiz"
+            ], (res) => {
+              if (res) aiSolverInstance.updateConfig(res);
+              resolve();
+            });
+          } else {
+            resolve();
+          }
+        });
+
         if (!aiSolverInstance.hasConfiguredProvider()) {
           const keyMsg = "AI API key required. Please configure Groq, Cerebras, OpenRouter, or Gemini in extension settings.";
-          updateDockStatus(keyMsg, "error");
+          console.warn(`[Solver] ${solverTimestamp()} ${keyMsg}`);
           notifyQuizProgress("error", { message: keyMsg });
-          return;
+          return { ok: false, message: keyMsg };
         }
 
-        updateDockStatus("Extracting assignment questions across page...", "info");
         notifyQuizProgress("loading_questions", { message: "Discovering all assignment questions across page..." });
 
         // Extract questions from DOM with progressive discovery, completeness validation and retries
@@ -4762,79 +4924,85 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           } catch (_) {}
         }
 
-        // Check landing page Start button or embedded coach widget fallback
-        if (!parsedQuestions || parsedQuestions.length === 0) {
-          // If on an overview/landing page with a Start button, initiate launch!
+        // Validate extracted questions before sending to AI
+        const validQuestions = [];
+        const rejectedQuestions = [];
+        (parsedQuestions || []).forEach((q, idx) => {
+          const val = validateQuestionCandidate(q);
+          if (val.isValid) {
+            validQuestions.push(q);
+          } else {
+            rejectedQuestions.push({ index: idx + 1, reason: val.reason, snippet: (q.question || "").slice(0, 40) });
+          }
+        });
+
+        if (rejectedQuestions.length > 0) {
+          console.warn(`[Solver] Filtered out ${rejectedQuestions.length} invalid question candidate(s):`, rejectedQuestions);
+        }
+
+        console.log(`[Solver] ${solverTimestamp()} Valid questions: ${validQuestions.length}`);
+
+        if (validQuestions.length === 0) {
           const startBtn = findAssignmentStartButton();
           if (startBtn) {
             console.log("[AI Solver] Start Assignment button present on landing page. Triggering assignment launch...");
-            isSolvingQuiz = false;
             await checkAndHandleAssignmentLaunch();
-            return;
+            return { ok: true, message: "Assignment launch initiated" };
           }
 
           const currentUrl = window.location.href;
           if (currentUrl.includes("/coach/") || currentUrl.includes("/ungradedwidget/")) {
-            updateDockStatus("Solving dialogue / widget...", "info");
             if (currentUrl.includes("/coach/")) {
               await runCoachDialogueAutomator();
             } else {
               await checkAndCompleteCurrentWidget();
             }
-            updateDockStatus("✓ Dialogue / widget completed", "success");
             notifyQuizProgress("completed", { message: "✓ Dialogue / widget completed successfully" });
-            return;
+            return { ok: true, message: "Dialogue / widget completed successfully" };
           }
 
           const noQMsg = "No valid assignment questions found on this page.";
-          console.log(`[Workflow] Stopped: ${noQMsg}`);
-          updateDockStatus(noQMsg, "error");
+          console.log(`[Solver] ${solverTimestamp()} Stopped: ${noQMsg}`);
           notifyQuizProgress("error", { message: noQMsg });
-          return;
+          return { ok: false, message: noQMsg };
         }
 
-        const totalCount = parsedQuestions.length;
-        updateDockStatus(`Discovered ${totalCount} question${totalCount === 1 ? '' : 's'}. Consulting AI...`, "info");
+        const totalCount = validQuestions.length;
         notifyQuizProgress("solving", {
           total: totalCount,
-          message: `Discovered ${totalCount} question${totalCount === 1 ? '' : 's'} to solve.`
+          message: `Discovered ${totalCount} valid question${totalCount === 1 ? '' : 's'} to solve.`
         });
 
         // 2. Process questions through multi-provider AI failover engine
-        const solveResult = await aiSolverInstance.solveQuestions(parsedQuestions, (progress) => {
+        const solveResult = await aiSolverInstance.solveQuestions(validQuestions, (progress) => {
           notifyQuizProgress("solving", {
             total: totalCount,
             message: progress.message || `Reasoning with ${progress.providerName}...`,
             model: `${progress.providerName} • ${progress.model}`
           });
-          if (progress.message) {
-            updateDockStatus(progress.message, "info");
-          }
-        });
+        }, solverStartTime);
 
         const answers = solveResult.answers;
         const providerUsed = solveResult.providerName;
         const modelUsed = solveResult.model;
-        const isCached = solveResult.isCached;
 
         // Ensure 1:1 question metadata association
         answers.forEach((ans, idx) => {
-          if (parsedQuestions[idx]) {
-            if (!ans.question) ans.question = parsedQuestions[idx].question;
-            if (!ans.options) ans.options = parsedQuestions[idx].options;
-            if (!ans.type) ans.type = parsedQuestions[idx].type;
-            if (ans.isMultipleSelect === undefined) ans.isMultipleSelect = parsedQuestions[idx].isMultipleSelect;
-            if (!ans.questionId) ans.questionId = parsedQuestions[idx].questionId;
-            if (ans.hasVisualElements === undefined) ans.hasVisualElements = parsedQuestions[idx].hasVisualElements;
-            if (!ans.visualContext && parsedQuestions[idx].visualContext) ans.visualContext = parsedQuestions[idx].visualContext;
+          if (validQuestions[idx]) {
+            if (!ans.question) ans.question = validQuestions[idx].question;
+            if (!ans.options) ans.options = validQuestions[idx].options;
+            if (!ans.type) ans.type = validQuestions[idx].type;
+            if (ans.isMultipleSelect === undefined) ans.isMultipleSelect = validQuestions[idx].isMultipleSelect;
+            if (!ans.questionId) ans.questionId = validQuestions[idx].questionId;
+            if (ans.hasVisualElements === undefined) ans.hasVisualElements = validQuestions[idx].hasVisualElements;
+            if (!ans.visualContext && validQuestions[idx].visualContext) ans.visualContext = validQuestions[idx].visualContext;
             ans.questionIndex = idx;
           }
         });
 
-        console.log(`[AI Solver] Answers from ${providerUsed} (${modelUsed}) [${answers.length} items]:`, answers);
+        console.log(`[Solver] ${solverTimestamp()} Answers normalized: ${answers.length}`);
 
         // 3. Process each question sequentially with smooth scrolling, pacing & visual verification
-        updateDockStatus(`Applying answers via ${providerUsed}...`, "info");
         notifyQuizProgress("filling_answers", {
           current: 0,
           total: totalCount,
@@ -4849,18 +5017,11 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
             message: `Reviewed Question ${curr} of ${tot} (${detail.markedCount} option${detail.markedCount === 1 ? '' : 's'} marked)...`,
             model: `${providerUsed} • ${modelUsed}`
           });
-          updateDockStatus(`Question ${curr}/${tot}: ${detail.markedCount} option(s) verified`, "info");
         });
 
-        if (fillResult === false) {
-          const noDomMsg = "Could not locate question elements to select answers.";
-          updateDockStatus(noDomMsg, "error");
-          notifyQuizProgress("error", { message: noDomMsg });
-          return;
-        }
+        console.log(`[Solver] ${solverTimestamp()} Mapping completed: ${fillResult.markedCount} option(s) marked across ${fillResult.questionCount} question(s)`);
 
         // 4. Safe final review navigation: smoothly scroll to the submission / honor code section
-        updateDockStatus("Navigating to final submission review...", "info");
         const honorSection = findHonorCodeSection();
         const submitBtn = findSubmitButton();
         if (honorSection) {
@@ -4912,11 +5073,11 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         let summaryMsg = "";
         if (unansweredCount === 0) {
           summaryMsg = `✓ All ${finalTotal} questions filled & verified. Honor Code preserved unticked. Please review & submit manually.`;
-          updateDockStatus(summaryMsg, "success");
         } else {
           summaryMsg = `⚠️ ${answeredCount} of ${finalTotal} questions filled. Question(s) ${unansweredQuestions.join(", ")} need review before submitting.`;
-          updateDockStatus(summaryMsg, "warn");
         }
+
+        console.log(`[Solver] ${solverTimestamp()} Completed. Elapsed time: ${Date.now() - solverStartTime}ms`);
 
         notifyQuizProgress("completed", {
           current: answeredCount,
@@ -4924,12 +5085,21 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           message: summaryMsg,
           model: `${providerUsed} • ${modelUsed}`
         });
+
+        return {
+          ok: true,
+          message: summaryMsg,
+          answeredCount,
+          totalCount: finalTotal,
+          provider: providerUsed,
+          model: modelUsed
+        };
       } catch (error) {
-        console.error("Error in solveQuiz:", error);
+        console.error(`[Solver] ${solverTimestamp()} Error in solveQuiz:`, error);
         let cleanMsg = error.message || "Assignment could not be completed.";
         cleanMsg = aiSolverInstance.maskAllApiKeys(cleanMsg);
-        updateDockStatus(`Error: ${cleanMsg}`, "error");
         notifyQuizProgress("error", { message: cleanMsg });
+        return { ok: false, message: cleanMsg };
       } finally {
         isSolvingQuiz = false;
         if (triggerBtn) {
@@ -5538,12 +5708,14 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
      * Applies AI answers across all questions in the DOM with question-by-question smooth scrolling.
      */
     async function fillQuizAnswersInDOM(aiAnswers, onProgress) {
-      if (!aiAnswers || !Array.isArray(aiAnswers) || aiAnswers.length === 0) return false;
+      if (!aiAnswers || !Array.isArray(aiAnswers) || aiAnswers.length === 0) {
+        return { success: false, markedCount: 0, questionCount: 0 };
+      }
 
       const questionElements = findVisibleQuestionElements();
       if (!questionElements || questionElements.length === 0) {
         showToast("Could not locate quiz questions on this page.", "error");
-        return false;
+        return { success: false, markedCount: 0, questionCount: 0 };
       }
 
       let totalMarkedCount = 0;
@@ -5605,7 +5777,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         showToast("Answers generated, but no matching options could be selected in the page.", "warning");
       }
 
-      return totalMarkedCount > 0;
+      return { success: totalMarkedCount > 0, markedCount: totalMarkedCount, questionCount: questionElements.length };
     }
 
     // -------------------------------------------------------------
@@ -5684,8 +5856,12 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       // Direct quiz
       if (actionName === "quiz") {
         (async () => {
-          await solveQuiz();
-          sendResponse({ received: true });
+          try {
+            const res = await solveQuiz();
+            sendResponse({ received: true, ok: res?.ok !== false, result: res });
+          } catch (err) {
+            sendResponse({ received: true, ok: false, error: err.message });
+          }
         })();
         return true;
       }
