@@ -1781,9 +1781,19 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         this.id = "groq";
         this.displayName = "Groq";
         this.apiKey = (config.apiKey || "").trim();
-        this.model = config.model || "llama-3.3-70b-versatile";
+        this.model = GroqProvider.normalizeModelName(config.model || "llama-3.3-70b-versatile");
         this.enabled = config.enabled !== undefined ? config.enabled : true;
         this.baseUrl = "https://api.groq.com/openai/v1/chat/completions";
+      }
+
+      static normalizeModelName(raw) {
+        if (!raw || typeof raw !== "string") return "llama-3.3-70b-versatile";
+        let trimmed = raw.trim();
+        // Disallow rate-limited or deprecated models on Groq
+        if (trimmed.includes("gpt-oss") || trimmed.includes("openai/")) {
+          return "llama-3.3-70b-versatile";
+        }
+        return trimmed || "llama-3.3-70b-versatile";
       }
 
       isEnabled() { return this.enabled && Boolean(this.apiKey); }
@@ -1828,31 +1838,35 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           onLog("response_received", { provider: this.displayName, status: res.status });
         }
 
-        // Handle 404 / 400 model deprecation fallback
-        if (!res.ok && (res.status === 404 || res.status === 400)) {
-          const errText = await res.text();
-          if (/model.*(?:not found|deprecated|decommissioned|does not exist)/i.test(errText)) {
-            const fallbackModel = activeModel.includes("70b") ? "llama-3.1-8b-instant" : "llama-3.3-70b-versatile";
-            if (fallbackModel !== activeModel) {
-              console.warn(`[Groq] Model ${activeModel} unavailable (${res.status}). Retrying with fallback: ${fallbackModel}...`);
-              activeModel = fallbackModel;
-              payload.model = activeModel;
-              res = await performAiProxyRequest(
-                this.baseUrl,
-                {
-                  method: "POST",
-                  headers: {
-                    "Authorization": `Bearer ${this.apiKey}`,
-                    "Content-Type": "application/json"
-                  },
-                  body: JSON.stringify(payload)
+        // Handle 429 Rate Limit or 404 / 400 model deprecation fallback
+        if (!res.ok && (res.status === 429 || res.status === 404 || res.status === 400)) {
+          const fallbackModels = [
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+            "qwen-2.5-32b",
+            "mixtral-8x7b-32768"
+          ].filter(m => m !== activeModel);
+
+          for (const nextModel of fallbackModels) {
+            console.warn(`[Groq] Model ${activeModel} unavailable (${res.status}). Retrying with fallback: ${nextModel}...`);
+            activeModel = nextModel;
+            payload.model = activeModel;
+            res = await performAiProxyRequest(
+              this.baseUrl,
+              {
+                method: "POST",
+                headers: {
+                  "Authorization": `Bearer ${this.apiKey}`,
+                  "Content-Type": "application/json"
                 },
-                timeoutMs
-              );
-              if (typeof onLog === "function") {
-                onLog("response_received", { provider: this.displayName, status: res.status, fallbackModel });
-              }
+                body: JSON.stringify(payload)
+              },
+              timeoutMs
+            );
+            if (typeof onLog === "function") {
+              onLog("response_received", { provider: this.displayName, status: res.status, fallbackModel: activeModel });
             }
+            if (res.ok) break;
           }
         }
 
@@ -2201,25 +2215,32 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         this.id = "gemini";
         this.displayName = "Google Gemini";
         this.apiKey = (config.apiKey || "").trim();
-        this.model = GeminiProvider.normalizeModelName(config.model || "gemini-2.0-flash");
+        this.model = GeminiProvider.normalizeModelName(config.model || "gemini-3.5-flash");
         this.enabled = config.enabled !== undefined ? config.enabled : true;
         this.baseUrl = "https://generativelanguage.googleapis.com/v1beta/models";
       }
 
       static normalizeModelName(raw) {
-        if (!raw || typeof raw !== "string") return "gemini-2.0-flash";
+        if (!raw || typeof raw !== "string") return "gemini-3.5-flash";
         let trimmed = raw.trim();
         while (trimmed.startsWith("/")) trimmed = trimmed.substring(1);
         while (trimmed.startsWith("models/")) trimmed = trimmed.substring("models/".length);
-        if (trimmed.includes("3.8") || trimmed.includes("3.5") || trimmed.includes("3-flash")) {
-          return "gemini-2.0-flash";
+
+        if (trimmed.includes("3.5") || trimmed.includes("3.5-flash")) return "gemini-3.5-flash";
+        if (trimmed.includes("3.8") || trimmed.includes("3.8-flash")) return "gemini-3.8-flash";
+        if (trimmed.includes("2.5") || trimmed.includes("2.5-flash")) return "gemini-2.5-flash";
+        if (trimmed.includes("2.0-flash-lite")) return "gemini-2.0-flash-lite";
+        if (trimmed.includes("2.0") || trimmed.includes("2.0-flash")) return "gemini-2.0-flash";
+        // Auto-upgrade deprecated models that return 404 for new users
+        if (trimmed.includes("1.5-flash") || trimmed.includes("1.0-pro") || trimmed.includes("1.5-pro")) {
+          return "gemini-3.5-flash";
         }
-        return trimmed || "gemini-2.0-flash";
+        return trimmed || "gemini-3.5-flash";
       }
 
       isEnabled() { return this.enabled && Boolean(this.apiKey); }
       getApiKey() { return this.apiKey; }
-      getModel() { return this.model || "gemini-2.0-flash"; }
+      getModel() { return this.model || "gemini-3.5-flash"; }
 
       maskApiKey(str) {
         if (!str || !this.apiKey) return str || "";
@@ -2258,11 +2279,18 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           onLog("response_received", { provider: this.displayName, status: res.status });
         }
 
-        // If 404 model not found, try fallback models
-        if (!res.ok && res.status === 404) {
-          const fallbackModels = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash"].filter(m => m !== activeModel);
+        // If 404 model not found or 400 unsupported, try modern flash fallback models
+        if (!res.ok && (res.status === 404 || res.status === 400)) {
+          const fallbackModels = [
+            "gemini-3.5-flash",
+            "gemini-3.8-flash",
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite"
+          ].filter(m => m !== activeModel);
+
           for (const nextModel of fallbackModels) {
-            console.warn(`[Gemini] Model ${activeModel} unavailable (404). Trying ${nextModel}...`);
+            console.warn(`[Gemini] Model ${activeModel} unavailable (${res.status}). Retrying with fallback: ${nextModel}...`);
             activeModel = nextModel;
             url = `${this.baseUrl}/${activeModel}:generateContent?key=${encodeURIComponent(this.apiKey)}`;
             res = await performAiProxyRequest(
@@ -2315,15 +2343,15 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     class MultiProviderAISolver {
       constructor() {
         this.providers = {
+          gemini: new GeminiProvider(),
           groq: new GroqProvider(),
           nvidia: new NvidiaProvider(),
           deepseek: new DeepSeekProvider(),
           openrouter: new OpenRouterProvider(),
-          gemini: new GeminiProvider(),
           cerebras: new CerebrasProvider()
         };
-        this.priority = ["groq", "nvidia", "deepseek", "openrouter", "gemini", "cerebras"];
-        this.activeProviderId = "groq";
+        this.priority = ["gemini", "groq", "nvidia", "deepseek", "openrouter", "cerebras"];
+        this.activeProviderId = "gemini";
         this.timeoutMs = 25000;
         this.cache = new Map();
         this.authFailedSet = new Set();
@@ -2332,7 +2360,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
 
       updateConfig(data) {
         if (!data) return;
-        if (data.activeProvider) this.activeProviderId = data.activeProvider;
+        this.activeProviderId = data.activeProvider || "gemini";
         if (Array.isArray(data.providerPriority) && data.providerPriority.length > 0) {
           this.priority = data.providerPriority;
         }
@@ -2381,7 +2409,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         this.providers.gemini = new GeminiProvider({
           enabled: gemCfg.enabled !== undefined ? gemCfg.enabled : true,
           apiKey: gemCfg.apiKey || data.key || data.geminiApiKey || "",
-          model: gemCfg.model || data.model || "gemini-2.0-flash"
+          model: gemCfg.model || data.model || "gemini-3.5-flash"
         });
 
         // Cerebras (for backward compatibility)
@@ -4602,6 +4630,207 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         }
       }
       return null;
+    }
+
+    /**
+     * Automatically ticks the Coursera Honor Code agreement checkbox (Screenshot 2).
+     */
+    async function tickHonorCodeCheckbox() {
+      const honorSection = findHonorCodeSection();
+      const honorCheckbox = findHonorCodeCheckbox(honorSection);
+      if (!honorCheckbox) {
+        console.warn("[Assignment Workflow] Honor Code checkbox not found in DOM.");
+        return false;
+      }
+
+      if (isHonorCodeCheckboxChecked(honorCheckbox)) {
+        console.log("[Assignment Workflow] Honor Code checkbox already ticked.");
+        return true;
+      }
+
+      console.log("[Assignment Workflow] Automatically ticking Honor Code checkbox...");
+      try {
+        honorCheckbox.scrollIntoView({ behavior: "smooth", block: "center" });
+      } catch (_) {}
+      await sleep(250);
+
+      try { honorCheckbox.focus(); } catch (_) {}
+
+      // Try clicking the associated CDS label / text container first
+      const labelTextSpan = document.getElementById("agreement-checkbox-base-label-text") ||
+                            document.querySelector(".honor-code-agreement");
+      const label = labelTextSpan?.closest("label") ||
+                    honorCheckbox.closest("label") ||
+                    (honorCheckbox.id ? document.querySelector(`label[for="${honorCheckbox.id}"]`) : null) ||
+                    honorCheckbox.parentElement;
+      const target = labelTextSpan || label || honorCheckbox;
+
+      try {
+        target.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, view: window }));
+        target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+        target.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, view: window }));
+        target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+        target.click();
+      } catch (_) {}
+
+      await sleep(150);
+
+      if (isHonorCodeCheckboxChecked(honorCheckbox)) {
+        console.log("[Assignment Workflow] Honor Code checkbox ticked via click.");
+        return true;
+      }
+
+      // Fallback: programmatic input tick with React controlled component setter override
+      const success = await setInputChecked(honorCheckbox, true, true);
+      console.log(`[Assignment Workflow] Honor Code checkbox ticked via setInputChecked: ${success}`);
+      return success || isHonorCodeCheckboxChecked(honorCheckbox);
+    }
+
+    /**
+     * Automatically clicks the native in-page Submit button below the Honor Code section.
+     */
+    async function clickAssessmentSubmitButton() {
+      console.log("[Assignment Workflow] Looking for in-page Submit button below Honor Code...");
+      let submitBtn = findSubmitButton();
+
+      // Wait up to 3.5 seconds for Coursera React state to enable the Submit button
+      const startTime = Date.now();
+      while (Date.now() - startTime < 3500) {
+        if (submitBtn && isSubmitButtonEnabled(submitBtn)) {
+          break;
+        }
+        await sleep(150);
+        submitBtn = findSubmitButton();
+      }
+
+      if (!submitBtn) {
+        console.warn("[Assignment Workflow] In-page Submit button not found.");
+        return false;
+      }
+
+      console.log("[Assignment Workflow] Automatically clicking in-page Submit button (enabled=" + isSubmitButtonEnabled(submitBtn) + ")...");
+      try {
+        submitBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+      } catch (_) {}
+      await sleep(200);
+
+      try {
+        submitBtn.focus();
+        submitBtn.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, view: window }));
+        submitBtn.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+        submitBtn.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, view: window }));
+        submitBtn.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+        submitBtn.click();
+      } catch (err) {
+        console.error("[Assignment Workflow] Error clicking Submit button:", err);
+        try { submitBtn.click(); } catch (_) {}
+      }
+
+      return true;
+    }
+
+    /**
+     * Automatically detects and confirms Coursera's "Ready to submit?" modal dialog (Screenshot 3).
+     */
+    async function confirmSubmissionModal() {
+      console.log("[Assignment Workflow] Waiting for 'Ready to submit?' confirmation dialog...");
+
+      // Wait up to 5 seconds for the dialog Submit button to render in the DOM
+      const startTime = Date.now();
+      let modalSubmitBtn = null;
+
+      while (Date.now() - startTime < 5000) {
+        // Direct testid lookup for the 2nd button (dialog-submit-button)
+        const directBtn = document.querySelector('button[data-testid="dialog-submit-button"], button.css-1haxtzk');
+        if (directBtn && isElementVisible(directBtn) && isSubmitButtonEnabled(directBtn)) {
+          modalSubmitBtn = directBtn;
+          break;
+        }
+
+        const modalInfo = findReadyToSubmitModal();
+        if (modalInfo && modalInfo.submitButton) {
+          modalSubmitBtn = modalInfo.submitButton;
+          break;
+        }
+        await sleep(200);
+      }
+
+      // Generic fallback check for any active modal with a Submit button
+      if (!modalSubmitBtn) {
+        const anyModal = document.querySelector('div[role="dialog"], div.rc-Modal, div.cds-dialog');
+        if (anyModal) {
+          const modalBtn = Array.from(anyModal.querySelectorAll("button, a.cds-button")).find(b => {
+            const text = (b.innerText || b.textContent || "").trim();
+            return /^submit$/i.test(text) || b.getAttribute("data-testid")?.includes("submit");
+          });
+          if (modalBtn) {
+            modalSubmitBtn = modalBtn;
+          }
+        }
+      }
+
+      if (!modalSubmitBtn) {
+        console.log("[Assignment Workflow] No confirmation modal dialog appeared (or submission already processed).");
+        return false;
+      }
+
+      console.log("[Assignment Workflow] 'Ready to submit?' modal detected. Automatically clicking modal Submit button (data-testid='dialog-submit-button')...");
+      await sleep(250);
+
+      try {
+        modalSubmitBtn.focus();
+        modalSubmitBtn.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, view: window }));
+        modalSubmitBtn.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+        modalSubmitBtn.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, view: window }));
+        modalSubmitBtn.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+        modalSubmitBtn.click();
+        console.log("[Assignment Workflow] Confirmation modal Submit button clicked successfully!");
+        return true;
+      } catch (err) {
+        console.error("[Assignment Workflow] Error clicking modal Submit button:", err);
+        try { modalSubmitBtn.click(); return true; } catch (_) { return false; }
+      }
+    }
+
+    /**
+     * Complete Post-Solve Auto-Submission Pipeline:
+     * 1. Automatically ticks the Honor Code agreement checkbox (#agreement-checkbox-base).
+     * 2. Waits 2 seconds for Coursera to auto-save the draft.
+     * 3. Automatically presses the in-page Submit button below the Honor Code (data-testid="submit-button").
+     * 4. Automatically confirms the "Ready to submit?" pop-up modal (data-testid="dialog-submit-button").
+     */
+    async function completeAssignmentSubmission() {
+      console.log("[Assignment Workflow] Initiating automated post-solve submission flow...");
+
+      notifyQuizProgress("submitting", {
+        message: "Ticking Honor Code agreement..."
+      });
+      const honorTicked = await tickHonorCodeCheckbox();
+
+      // Coursera auto-saves draft after ticking Honor Code; wait 2 full seconds as requested
+      notifyQuizProgress("submitting", {
+        message: "Waiting 2 seconds for draft to save..."
+      });
+      console.log("[Assignment Workflow] Honor Code checked. Waiting 2 seconds for draft to save...");
+      await sleep(2000);
+
+      notifyQuizProgress("submitting", {
+        message: "Submitting assignment..."
+      });
+      const submitClicked = await clickAssessmentSubmitButton();
+      await sleep(600);
+
+      notifyQuizProgress("submitting", {
+        message: "Confirming submission dialog..."
+      });
+      const modalConfirmed = await confirmSubmissionModal();
+      await sleep(300);
+
+      return {
+        honorTicked,
+        submitClicked,
+        modalConfirmed
+      };
     }
 
     /**

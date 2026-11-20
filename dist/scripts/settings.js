@@ -35,7 +35,7 @@
     gemini: {
       enabled: true,
       apiKey: "",
-      model: "gemini-2.0-flash"
+      model: "gemini-3.5-flash"
     },
     cerebras: {
       enabled: true,
@@ -136,8 +136,8 @@
     const pillFb4 = document.getElementById("pillFb4");
 
     function updatePriorityChainDisplay(primaryId) {
-      const activePrimary = primaryId || primarySelect?.value || "groq";
-      const remaining = ["groq", "nvidia", "deepseek", "openrouter", "gemini", "cerebras"].filter(id => id !== activePrimary);
+      const activePrimary = primaryId || primarySelect?.value || "gemini";
+      const remaining = ["gemini", "groq", "nvidia", "deepseek", "openrouter", "cerebras"].filter(id => id !== activePrimary);
 
       if (pillPrimary) {
         pillPrimary.textContent = `1. ${PROVIDER_NAMES[activePrimary] || activePrimary}`;
@@ -372,7 +372,7 @@
         if (!stored) return;
 
         // Active primary provider
-        const primary = stored.activeProvider || "groq";
+        const primary = stored.activeProvider || "gemini";
         if (primarySelect) primarySelect.value = primary;
         updatePriorityChainDisplay(primary);
 
@@ -435,9 +435,6 @@
         if (providers.gemini.key) providers.gemini.key.value = gemCfg.apiKey || stored.key || "";
         if (providers.gemini.model) {
           let gemModel = gemCfg.model || stored.model || DEFAULT_PROVIDERS.gemini.model;
-          if (gemModel.includes("3.8") || gemModel.includes("3.5")) {
-            gemModel = "gemini-2.0-flash";
-          }
           providers.gemini.model.value = gemModel;
         }
         if (providers.gemini.key?.value) {
@@ -471,11 +468,11 @@
       else if (timeoutVal > 60) timeoutVal = 60;
       if (timeoutInput) timeoutInput.value = timeoutVal;
 
-      const primaryVal = primarySelect?.value || "groq";
+      const primaryVal = primarySelect?.value || "gemini";
       const autoQuizVal = Boolean(autoQuizToggle?.checked);
 
       // Build priority list
-      const remaining = ["groq", "nvidia", "deepseek", "openrouter", "gemini", "cerebras"].filter(id => id !== primaryVal);
+      const remaining = ["gemini", "groq", "nvidia", "deepseek", "openrouter", "cerebras"].filter(id => id !== primaryVal);
       const priorityList = [primaryVal, ...remaining];
 
       // Build providers config

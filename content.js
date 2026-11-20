@@ -1781,9 +1781,19 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         this.id = "groq";
         this.displayName = "Groq";
         this.apiKey = (config.apiKey || "").trim();
-        this.model = config.model || "llama-3.3-70b-versatile";
+        this.model = GroqProvider.normalizeModelName(config.model || "llama-3.3-70b-versatile");
         this.enabled = config.enabled !== undefined ? config.enabled : true;
         this.baseUrl = "https://api.groq.com/openai/v1/chat/completions";
+      }
+
+      static normalizeModelName(raw) {
+        if (!raw || typeof raw !== "string") return "llama-3.3-70b-versatile";
+        let trimmed = raw.trim();
+        // Disallow rate-limited or deprecated models on Groq
+        if (trimmed.includes("gpt-oss") || trimmed.includes("openai/")) {
+          return "llama-3.3-70b-versatile";
+        }
+        return trimmed || "llama-3.3-70b-versatile";
       }
 
       isEnabled() { return this.enabled && Boolean(this.apiKey); }
@@ -1828,31 +1838,35 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           onLog("response_received", { provider: this.displayName, status: res.status });
         }
 
-        // Handle 404 / 400 model deprecation fallback
-        if (!res.ok && (res.status === 404 || res.status === 400)) {
-          const errText = await res.text();
-          if (/model.*(?:not found|deprecated|decommissioned|does not exist)/i.test(errText)) {
-            const fallbackModel = activeModel.includes("70b") ? "llama-3.1-8b-instant" : "llama-3.3-70b-versatile";
-            if (fallbackModel !== activeModel) {
-              console.warn(`[Groq] Model ${activeModel} unavailable (${res.status}). Retrying with fallback: ${fallbackModel}...`);
-              activeModel = fallbackModel;
-              payload.model = activeModel;
-              res = await performAiProxyRequest(
-                this.baseUrl,
-                {
-                  method: "POST",
-                  headers: {
-                    "Authorization": `Bearer ${this.apiKey}`,
-                    "Content-Type": "application/json"
-                  },
-                  body: JSON.stringify(payload)
+        // Handle 429 Rate Limit or 404 / 400 model deprecation fallback
+        if (!res.ok && (res.status === 429 || res.status === 404 || res.status === 400)) {
+          const fallbackModels = [
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+            "qwen-2.5-32b",
+            "mixtral-8x7b-32768"
+          ].filter(m => m !== activeModel);
+
+          for (const nextModel of fallbackModels) {
+            console.warn(`[Groq] Model ${activeModel} unavailable (${res.status}). Retrying with fallback: ${nextModel}...`);
+            activeModel = nextModel;
+            payload.model = activeModel;
+            res = await performAiProxyRequest(
+              this.baseUrl,
+              {
+                method: "POST",
+                headers: {
+                  "Authorization": `Bearer ${this.apiKey}`,
+                  "Content-Type": "application/json"
                 },
-                timeoutMs
-              );
-              if (typeof onLog === "function") {
-                onLog("response_received", { provider: this.displayName, status: res.status, fallbackModel });
-              }
+                body: JSON.stringify(payload)
+              },
+              timeoutMs
+            );
+            if (typeof onLog === "function") {
+              onLog("response_received", { provider: this.displayName, status: res.status, fallbackModel: activeModel });
             }
+            if (res.ok) break;
           }
         }
 
@@ -2201,25 +2215,32 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         this.id = "gemini";
         this.displayName = "Google Gemini";
         this.apiKey = (config.apiKey || "").trim();
-        this.model = GeminiProvider.normalizeModelName(config.model || "gemini-2.0-flash");
+        this.model = GeminiProvider.normalizeModelName(config.model || "gemini-3.5-flash");
         this.enabled = config.enabled !== undefined ? config.enabled : true;
         this.baseUrl = "https://generativelanguage.googleapis.com/v1beta/models";
       }
 
       static normalizeModelName(raw) {
-        if (!raw || typeof raw !== "string") return "gemini-2.0-flash";
+        if (!raw || typeof raw !== "string") return "gemini-3.5-flash";
         let trimmed = raw.trim();
         while (trimmed.startsWith("/")) trimmed = trimmed.substring(1);
         while (trimmed.startsWith("models/")) trimmed = trimmed.substring("models/".length);
-        if (trimmed.includes("3.8") || trimmed.includes("3.5") || trimmed.includes("3-flash")) {
-          return "gemini-2.0-flash";
+
+        if (trimmed.includes("3.5") || trimmed.includes("3.5-flash")) return "gemini-3.5-flash";
+        if (trimmed.includes("3.8") || trimmed.includes("3.8-flash")) return "gemini-3.8-flash";
+        if (trimmed.includes("2.5") || trimmed.includes("2.5-flash")) return "gemini-2.5-flash";
+        if (trimmed.includes("2.0-flash-lite")) return "gemini-2.0-flash-lite";
+        if (trimmed.includes("2.0") || trimmed.includes("2.0-flash")) return "gemini-2.0-flash";
+        // Auto-upgrade deprecated models that return 404 for new users
+        if (trimmed.includes("1.5-flash") || trimmed.includes("1.0-pro") || trimmed.includes("1.5-pro")) {
+          return "gemini-3.5-flash";
         }
-        return trimmed || "gemini-2.0-flash";
+        return trimmed || "gemini-3.5-flash";
       }
 
       isEnabled() { return this.enabled && Boolean(this.apiKey); }
       getApiKey() { return this.apiKey; }
-      getModel() { return this.model || "gemini-2.0-flash"; }
+      getModel() { return this.model || "gemini-3.5-flash"; }
 
       maskApiKey(str) {
         if (!str || !this.apiKey) return str || "";
@@ -2258,11 +2279,18 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           onLog("response_received", { provider: this.displayName, status: res.status });
         }
 
-        // If 404 model not found, try fallback models
-        if (!res.ok && res.status === 404) {
-          const fallbackModels = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash"].filter(m => m !== activeModel);
+        // If 404 model not found or 400 unsupported, try modern flash fallback models
+        if (!res.ok && (res.status === 404 || res.status === 400)) {
+          const fallbackModels = [
+            "gemini-3.5-flash",
+            "gemini-3.8-flash",
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite"
+          ].filter(m => m !== activeModel);
+
           for (const nextModel of fallbackModels) {
-            console.warn(`[Gemini] Model ${activeModel} unavailable (404). Trying ${nextModel}...`);
+            console.warn(`[Gemini] Model ${activeModel} unavailable (${res.status}). Retrying with fallback: ${nextModel}...`);
             activeModel = nextModel;
             url = `${this.baseUrl}/${activeModel}:generateContent?key=${encodeURIComponent(this.apiKey)}`;
             res = await performAiProxyRequest(
@@ -2315,15 +2343,15 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     class MultiProviderAISolver {
       constructor() {
         this.providers = {
+          gemini: new GeminiProvider(),
           groq: new GroqProvider(),
           nvidia: new NvidiaProvider(),
           deepseek: new DeepSeekProvider(),
           openrouter: new OpenRouterProvider(),
-          gemini: new GeminiProvider(),
           cerebras: new CerebrasProvider()
         };
-        this.priority = ["groq", "nvidia", "deepseek", "openrouter", "gemini", "cerebras"];
-        this.activeProviderId = "groq";
+        this.priority = ["gemini", "groq", "nvidia", "deepseek", "openrouter", "cerebras"];
+        this.activeProviderId = "gemini";
         this.timeoutMs = 25000;
         this.cache = new Map();
         this.authFailedSet = new Set();
@@ -2332,7 +2360,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
 
       updateConfig(data) {
         if (!data) return;
-        if (data.activeProvider) this.activeProviderId = data.activeProvider;
+        this.activeProviderId = data.activeProvider || "gemini";
         if (Array.isArray(data.providerPriority) && data.providerPriority.length > 0) {
           this.priority = data.providerPriority;
         }
@@ -2381,7 +2409,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         this.providers.gemini = new GeminiProvider({
           enabled: gemCfg.enabled !== undefined ? gemCfg.enabled : true,
           apiKey: gemCfg.apiKey || data.key || data.geminiApiKey || "",
-          model: gemCfg.model || data.model || "gemini-2.0-flash"
+          model: gemCfg.model || data.model || "gemini-3.5-flash"
         });
 
         // Cerebras (for backward compatibility)

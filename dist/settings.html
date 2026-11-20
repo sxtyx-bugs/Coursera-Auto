@@ -63,11 +63,11 @@
               <div class="input-well">
                 <span class="well-tag">PRI</span>
                 <select id="primaryProviderSelect">
-                  <option value="groq" selected>Groq (Ultra-Fast Reasoning • Primary)</option>
+                  <option value="gemini" selected>Google Gemini (Deep Reasoning • Primary)</option>
+                  <option value="groq">Groq (Ultra-Fast Reasoning)</option>
                   <option value="nvidia">NVIDIA NIM (Accelerated Inference • High Performance)</option>
                   <option value="deepseek">DeepSeek (V3 &amp; R1 Reasoning • High Accuracy)</option>
                   <option value="openrouter">OpenRouter (Free Multi-Model • Free)</option>
-                  <option value="gemini">Google Gemini (Deep Reasoning)</option>
                   <option value="cerebras">Cerebras (Wafer-Scale Inference)</option>
                 </select>
               </div>
@@ -370,10 +370,12 @@
               <div class="input-well">
                 <span class="well-tag">MDL</span>
                 <select id="geminiModelSelect">
-                  <option value="gemini-2.0-flash" selected>gemini-2.0-flash (Ultra Low Latency • Recommended)</option>
-                  <option value="gemini-1.5-flash">gemini-1.5-flash (Broadly Compatible)</option>
+                  <option value="gemini-3.5-flash" selected>gemini-3.5-flash (Primary Recommended)</option>
+                  <option value="gemini-3.8-flash">gemini-3.8-flash (High Speed)</option>
                   <option value="gemini-2.5-flash">gemini-2.5-flash</option>
-                  <option value="gemini-1.5-pro">gemini-1.5-pro (High Reasoning)</option>
+                  <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+                  <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite</option>
+                  <option value="gemini-2.5-pro">gemini-2.5-pro (High Reasoning)</option>
                 </select>
                 <button type="button" class="toggle-key-btn" id="geminiRefreshBtn" title="Discover live models" style="padding: 0 6px;">↻</button>
               </div>

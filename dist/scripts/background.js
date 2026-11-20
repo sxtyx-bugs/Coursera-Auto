@@ -302,7 +302,7 @@
         if (!m || !m.id) return false;
         if (m.active === false) return false;
         const id = m.id.toLowerCase();
-        if (id.includes("whisper") || id.includes("guard") || id.includes("embed") || id.includes("tts")) return false;
+        if (id.includes("whisper") || id.includes("guard") || id.includes("embed") || id.includes("tts") || id.includes("gpt-oss")) return false;
         return true;
       });
 
@@ -316,11 +316,16 @@
         supportsVision: m.id.toLowerCase().includes("vision")
       }));
 
-      // Sort: prioritize versatile/70b models first
+      // Sort: prioritize versatile/70b models first, then high-throughput 8b
       normalized.sort((a, b) => {
-        const aScore = a.id.includes("70b-versatile") ? 100 : a.id.includes("70b") ? 80 : a.id.includes("8b") ? 60 : 10;
-        const bScore = b.id.includes("70b-versatile") ? 100 : b.id.includes("70b") ? 80 : b.id.includes("8b") ? 60 : 10;
-        return bScore - aScore;
+        const getScore = (m) => {
+          if (m.id.includes("70b-versatile")) return 100;
+          if (m.id.includes("8b-instant")) return 90;
+          if (m.id.includes("70b")) return 80;
+          if (m.id.includes("8b")) return 70;
+          return 10;
+        };
+        return getScore(b) - getScore(a);
       });
 
       return normalized;
@@ -522,7 +527,7 @@
         const methods = m.supportedGenerationMethods || [];
         if (!methods.includes("generateContent")) return false;
         const name = m.name.toLowerCase();
-        if (name.includes("embedding") || name.includes("imagen") || name.includes("aqa")) return false;
+        if (name.includes("embedding") || name.includes("imagen") || name.includes("aqa") || name.includes("tts")) return false;
         return true;
       });
 
@@ -539,11 +544,18 @@
         };
       });
 
-      // Sort: prioritize 2.5-flash, 2.5-pro, 2.0-flash, 1.5-flash
+      // Sort: prioritize 3.5-flash, 3.8-flash, 2.5-flash, 2.0-flash
       normalized.sort((a, b) => {
-        const aScore = a.id.includes("2.5-flash") ? 100 : a.id.includes("2.5-pro") ? 90 : a.id.includes("2.0-flash") ? 80 : a.id.includes("1.5-flash") ? 70 : 10;
-        const bScore = b.id.includes("2.5-flash") ? 100 : b.id.includes("2.5-pro") ? 90 : b.id.includes("2.0-flash") ? 80 : b.id.includes("1.5-flash") ? 70 : 10;
-        return bScore - aScore;
+        const getScore = (m) => {
+          if (m.id.includes("3.5-flash")) return 110;
+          if (m.id.includes("3.8-flash")) return 105;
+          if (m.id.includes("2.5-flash")) return 100;
+          if (m.id.includes("2.0-flash")) return 90;
+          if (m.id.includes("2.0-flash-lite")) return 80;
+          if (m.id.includes("2.5-pro")) return 70;
+          return 10;
+        };
+        return getScore(b) - getScore(a);
       });
 
       return normalized;

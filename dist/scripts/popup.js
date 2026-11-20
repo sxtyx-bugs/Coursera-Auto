@@ -30,10 +30,12 @@
       { id: "mistralai/mistral-small-24b-instruct-2501:free", name: "mistral-small:free" }
     ],
     gemini: [
-      { id: "gemini-2.0-flash", name: "gemini-2.0-flash (Recommended)" },
-      { id: "gemini-1.5-flash", name: "gemini-1.5-flash" },
-      { id: "gemini-2.5-flash", name: "gemini-2.5-flash" },
-      { id: "gemini-1.5-pro", name: "gemini-1.5-pro" }
+      { id: "gemini-3.5-flash", name: "Gemini 3.5 Flash (Primary Recommended)" },
+      { id: "gemini-3.8-flash", name: "Gemini 3.8 Flash (High Speed)" },
+      { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash" },
+      { id: "gemini-2.0-flash", name: "Gemini 2.0 Flash" },
+      { id: "gemini-2.0-flash-lite", name: "Gemini 2.0 Flash Lite" },
+      { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro (Deep Reasoning)" }
     ],
     cerebras: [
       { id: "llama3.3-70b", name: "llama3.3-70b (Recommended)" },
@@ -304,14 +306,14 @@
     const openSettingsDetailBtn = document.getElementById("openSettingsDetailBtn");
 
     let loadedConfig = {
+      gemini: { enabled: true, apiKey: "", model: "gemini-3.5-flash" },
       groq: { enabled: true, apiKey: "", model: "llama-3.3-70b-versatile" },
       nvidia: { enabled: true, apiKey: "", model: "meta/llama-3.3-70b-instruct" },
       deepseek: { enabled: true, apiKey: "", model: "deepseek-chat" },
       openrouter: { enabled: true, apiKey: "", model: "meta-llama/llama-3.3-70b-instruct:free" },
-      gemini: { enabled: true, apiKey: "", model: "gemini-2.0-flash" },
       cerebras: { enabled: true, apiKey: "", model: "llama3.3-70b" }
     };
-    let currentProvider = "groq";
+    let currentProvider = "gemini";
     let modelFetchToken = 0;
 
     openSettingsDetailBtn?.addEventListener("click", () => {
@@ -534,7 +536,7 @@
         if (data.deepseekApiKey && !loadedConfig.deepseek.apiKey) loadedConfig.deepseek.apiKey = data.deepseekApiKey;
         if (data.openrouterApiKey && !loadedConfig.openrouter.apiKey) loadedConfig.openrouter.apiKey = data.openrouterApiKey;
 
-        const activeP = data.activeProvider || "groq";
+        const activeP = data.activeProvider || "gemini";
         if (providerSelect) providerSelect.value = activeP;
         switchProviderView(activeP);
 
@@ -605,7 +607,7 @@
         model: modelVal
       };
 
-      const allProviderIds = ["groq", "nvidia", "deepseek", "openrouter", "gemini", "cerebras"];
+      const allProviderIds = ["gemini", "groq", "nvidia", "deepseek", "openrouter", "cerebras"];
       const remaining = allProviderIds.filter(id => id !== currentProvider);
       const priorityList = [currentProvider, ...remaining];
 
