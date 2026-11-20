@@ -3255,6 +3255,10 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         const tag = container.tagName?.toLowerCase();
         if (tag === "body" || tag === "html" || tag === "main") return false;
 
+        // Container must not be an internal question sub-part like __content or __title
+        const cls = container.getAttribute?.("class") || "";
+        if (/__content|__title|__footer/i.test(cls)) return false;
+
         // Container must have at least one choice control or text input
         const hasChoice = findQuestionOptionInputs(container).length > 0;
         const textInputs = Array.from(container.querySelectorAll('textarea, input[type="text"]')).filter(inp => {
@@ -3299,10 +3303,8 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         'div[role="region"][aria-label*="Question" i]',
         'div.rc-FormPartsQuestion',
         'div.rc-FormPart',
-        'div[class*="rc-FormPart"]',
         'div.c-question',
         'div.c-question-part',
-        'div[class*="c-question"]',
         'div[class*="questionContainer" i]',
         'div[class*="QuestionContainer" i]',
         'div[class*="question-item" i]',
@@ -3396,6 +3398,16 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           if (!el.contains(other)) return false;
 
           // 'el' contains 'other'. Should 'el' be discarded in favor of 'other'?
+          // If 'el' is an explicit question container (rc-FormPartsQuestion or question data-testid),
+          // 'el' is the true question container; any 'other' inside it is just an internal element.
+          if (
+            el.classList?.contains?.("rc-FormPartsQuestion") ||
+            el.getAttribute?.("data-testid")?.toLowerCase()?.includes("question") ||
+            el.tagName?.toLowerCase() === "fieldset"
+          ) {
+            return false;
+          }
+
           // If 'other' is an options group (role="radiogroup" or role="group") or other lacks a prompt while el has a prompt,
           // then 'el' is the true question container and 'other' is just an inner choices container.
           const otherRole = other.getAttribute?.("role");
@@ -4516,6 +4528,19 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
      * Distinguishes it from in-page buttons and ensures the modal is never interfered with.
      */
     function findReadyToSubmitModal() {
+      // 1. Direct confirmed selector test for Coursera dialog submit button
+      const directSubmit = document.querySelector('button[data-testid="dialog-submit-button"], button.css-1haxtzk');
+      if (directSubmit && isElementVisible(directSubmit)) {
+        const dialog = directSubmit.closest('div[role="dialog"], div.rc-Modal, div.cds-dialog, div[class*="modal" i], div[class*="Dialog" i]') || directSubmit.parentElement;
+        return {
+          dialog,
+          submitButton: directSubmit,
+          cancelButton: dialog?.querySelector('button[data-testid*="cancel" i], button:not([data-testid="dialog-submit-button"])') || null,
+          isSubmitEnabled: isSubmitButtonEnabled(directSubmit)
+        };
+      }
+
+      // 2. Scan dialog candidates
       const modalCandidates = Array.from(document.querySelectorAll(
         'div[role="dialog"], div.rc-Modal, div.cds-dialog, div[class*="modal" i], div[class*="Dialog" i]'
       ));
@@ -4524,8 +4549,9 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         const txt = (dialog.innerText || dialog.textContent || "");
         if (/ready\s+to\s+submit\??/i.test(txt)) {
           const submitBtn = Array.from(dialog.querySelectorAll("button, a.cds-button")).find(b => {
+            const bTestId = b.getAttribute("data-testid") || "";
             const bText = (b.innerText || b.textContent || "").trim();
-            return /^submit$/i.test(bText) || b.getAttribute("data-testid")?.includes("submit");
+            return bTestId === "dialog-submit-button" || /^submit$/i.test(bText) || bTestId.includes("submit");
           });
           const cancelBtn = Array.from(dialog.querySelectorAll("button, a.cds-button")).find(b => {
             const bText = (b.innerText || b.textContent || "").trim();
@@ -4548,6 +4574,8 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     function findSubmitButton() {
       const submitSelectors = [
         'button[data-testid="submit-button"]',
+        'button.cds-button-primary.css-dxhcv5',
+        'button[aria-label="Submit"][data-testid="submit-button"]',
         'button[data-testid="exam-submit-button"]',
         'button[data-testid="quiz-submit-button"]',
         'button[data-testid*="submit" i]'
@@ -4557,6 +4585,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         const elements = Array.from(document.querySelectorAll(sel));
         for (const btn of elements) {
           if (!isElementVisible(btn)) continue;
+          if (btn.getAttribute("data-testid") === "dialog-submit-button") continue;
           if (btn.closest('div[role="dialog"], div.rc-Modal, div.cds-dialog, div[class*="modal" i]')) continue;
           return btn;
         }
@@ -4565,6 +4594,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       const allButtons = Array.from(document.querySelectorAll("button, a.cds-button"));
       for (const btn of allButtons) {
         if (!isElementVisible(btn)) continue;
+        if (btn.getAttribute("data-testid") === "dialog-submit-button") continue;
         if (btn.closest('div[role="dialog"], div.rc-Modal, div.cds-dialog, div[class*="modal" i]')) continue;
         const text = (btn.innerText || btn.textContent || "").trim();
         if (/^(submit|submit\s+quiz|submit\s+assignment|submit\s+exam)$/i.test(text)) {
@@ -4677,20 +4707,28 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     async function confirmSubmissionModal() {
       console.log("[Assignment Workflow] Waiting for 'Ready to submit?' confirmation dialog...");
 
-      // Wait up to 4.5 seconds for the modal dialog to render in the DOM
+      // Wait up to 5 seconds for the dialog Submit button to render in the DOM
       const startTime = Date.now();
-      let modalInfo = null;
+      let modalSubmitBtn = null;
 
-      while (Date.now() - startTime < 4500) {
-        modalInfo = findReadyToSubmitModal();
+      while (Date.now() - startTime < 5000) {
+        // Direct testid lookup for the 2nd button (dialog-submit-button)
+        const directBtn = document.querySelector('button[data-testid="dialog-submit-button"], button.css-1haxtzk');
+        if (directBtn && isElementVisible(directBtn) && isSubmitButtonEnabled(directBtn)) {
+          modalSubmitBtn = directBtn;
+          break;
+        }
+
+        const modalInfo = findReadyToSubmitModal();
         if (modalInfo && modalInfo.submitButton) {
+          modalSubmitBtn = modalInfo.submitButton;
           break;
         }
         await sleep(200);
       }
 
       // Generic fallback check for any active modal with a Submit button
-      if (!modalInfo || !modalInfo.submitButton) {
+      if (!modalSubmitBtn) {
         const anyModal = document.querySelector('div[role="dialog"], div.rc-Modal, div.cds-dialog');
         if (anyModal) {
           const modalBtn = Array.from(anyModal.querySelectorAll("button, a.cds-button")).find(b => {
@@ -4698,22 +4736,17 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
             return /^submit$/i.test(text) || b.getAttribute("data-testid")?.includes("submit");
           });
           if (modalBtn) {
-            modalInfo = {
-              dialog: anyModal,
-              submitButton: modalBtn,
-              isSubmitEnabled: isSubmitButtonEnabled(modalBtn)
-            };
+            modalSubmitBtn = modalBtn;
           }
         }
       }
 
-      if (!modalInfo || !modalInfo.submitButton) {
+      if (!modalSubmitBtn) {
         console.log("[Assignment Workflow] No confirmation modal dialog appeared (or submission already processed).");
         return false;
       }
 
-      console.log("[Assignment Workflow] 'Ready to submit?' modal detected. Automatically clicking modal Submit button...");
-      const modalSubmitBtn = modalInfo.submitButton;
+      console.log("[Assignment Workflow] 'Ready to submit?' modal detected. Automatically clicking modal Submit button (data-testid='dialog-submit-button')...");
       await sleep(250);
 
       try {
@@ -4734,8 +4767,9 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     /**
      * Complete Post-Solve Auto-Submission Pipeline:
      * 1. Automatically ticks the Honor Code agreement checkbox (#agreement-checkbox-base).
-     * 2. Automatically presses the in-page Submit button below the Honor Code.
-     * 3. Automatically confirms the "Ready to submit?" pop-up modal.
+     * 2. Waits 2 seconds for Coursera to auto-save the draft.
+     * 3. Automatically presses the in-page Submit button below the Honor Code (data-testid="submit-button").
+     * 4. Automatically confirms the "Ready to submit?" pop-up modal (data-testid="dialog-submit-button").
      */
     async function completeAssignmentSubmission() {
       console.log("[Assignment Workflow] Initiating automated post-solve submission flow...");
@@ -4744,13 +4778,220 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         message: "Ticking Honor Code agreement..."
       });
       const honorTicked = await tickHonorCodeCheckbox();
-      await sleep(400);
+
+      // Coursera auto-saves draft after ticking Honor Code; wait 2 full seconds as requested
+      notifyQuizProgress("submitting", {
+        message: "Waiting 2 seconds for draft to save..."
+      });
+      console.log("[Assignment Workflow] Honor Code checked. Waiting 2 seconds for draft to save...");
+      await sleep(2000);
 
       notifyQuizProgress("submitting", {
         message: "Submitting assignment..."
       });
       const submitClicked = await clickAssessmentSubmitButton();
-      await sleep(500);
+      await sleep(600);
+
+      notifyQuizProgress("submitting", {
+        message: "Confirming submission dialog..."
+      });
+      const modalConfirmed = await confirmSubmissionModal();
+      await sleep(300);
+
+      return {
+        honorTicked,
+        submitClicked,
+        modalConfirmed
+      };
+    }
+
+    /**
+     * Automatically ticks the Coursera Honor Code agreement checkbox (Screenshot 2).
+     */
+    async function tickHonorCodeCheckbox() {
+      const honorSection = findHonorCodeSection();
+      const honorCheckbox = findHonorCodeCheckbox(honorSection);
+      if (!honorCheckbox) {
+        console.warn("[Assignment Workflow] Honor Code checkbox not found in DOM.");
+        return false;
+      }
+
+      if (isHonorCodeCheckboxChecked(honorCheckbox)) {
+        console.log("[Assignment Workflow] Honor Code checkbox already ticked.");
+        return true;
+      }
+
+      console.log("[Assignment Workflow] Automatically ticking Honor Code checkbox...");
+      try {
+        honorCheckbox.scrollIntoView({ behavior: "smooth", block: "center" });
+      } catch (_) {}
+      await sleep(250);
+
+      try { honorCheckbox.focus(); } catch (_) {}
+
+      // Try clicking the associated CDS label / text container first
+      const labelTextSpan = document.getElementById("agreement-checkbox-base-label-text") ||
+                            document.querySelector(".honor-code-agreement");
+      const label = labelTextSpan?.closest("label") ||
+                    honorCheckbox.closest("label") ||
+                    (honorCheckbox.id ? document.querySelector(`label[for="${honorCheckbox.id}"]`) : null) ||
+                    honorCheckbox.parentElement;
+      const target = labelTextSpan || label || honorCheckbox;
+
+      try {
+        target.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, view: window }));
+        target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+        target.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, view: window }));
+        target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+        target.click();
+      } catch (_) {}
+
+      await sleep(150);
+
+      if (isHonorCodeCheckboxChecked(honorCheckbox)) {
+        console.log("[Assignment Workflow] Honor Code checkbox ticked via click.");
+        return true;
+      }
+
+      // Fallback: programmatic input tick with React controlled component setter override
+      const success = await setInputChecked(honorCheckbox, true, true);
+      console.log(`[Assignment Workflow] Honor Code checkbox ticked via setInputChecked: ${success}`);
+      return success || isHonorCodeCheckboxChecked(honorCheckbox);
+    }
+
+    /**
+     * Automatically clicks the native in-page Submit button below the Honor Code section.
+     */
+    async function clickAssessmentSubmitButton() {
+      console.log("[Assignment Workflow] Looking for in-page Submit button below Honor Code...");
+      let submitBtn = findSubmitButton();
+
+      // Wait up to 3.5 seconds for Coursera React state to enable the Submit button
+      const startTime = Date.now();
+      while (Date.now() - startTime < 3500) {
+        if (submitBtn && isSubmitButtonEnabled(submitBtn)) {
+          break;
+        }
+        await sleep(150);
+        submitBtn = findSubmitButton();
+      }
+
+      if (!submitBtn) {
+        console.warn("[Assignment Workflow] In-page Submit button not found.");
+        return false;
+      }
+
+      console.log("[Assignment Workflow] Automatically clicking in-page Submit button (enabled=" + isSubmitButtonEnabled(submitBtn) + ")...");
+      try {
+        submitBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+      } catch (_) {}
+      await sleep(200);
+
+      try {
+        submitBtn.focus();
+        submitBtn.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, view: window }));
+        submitBtn.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+        submitBtn.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, view: window }));
+        submitBtn.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+        submitBtn.click();
+      } catch (err) {
+        console.error("[Assignment Workflow] Error clicking Submit button:", err);
+        try { submitBtn.click(); } catch (_) {}
+      }
+
+      return true;
+    }
+
+    /**
+     * Automatically detects and confirms Coursera's "Ready to submit?" modal dialog (Screenshot 3).
+     */
+    async function confirmSubmissionModal() {
+      console.log("[Assignment Workflow] Waiting for 'Ready to submit?' confirmation dialog...");
+
+      // Wait up to 5 seconds for the dialog Submit button to render in the DOM
+      const startTime = Date.now();
+      let modalSubmitBtn = null;
+
+      while (Date.now() - startTime < 5000) {
+        // Direct testid lookup for the 2nd button (dialog-submit-button)
+        const directBtn = document.querySelector('button[data-testid="dialog-submit-button"], button.css-1haxtzk');
+        if (directBtn && isElementVisible(directBtn) && isSubmitButtonEnabled(directBtn)) {
+          modalSubmitBtn = directBtn;
+          break;
+        }
+
+        const modalInfo = findReadyToSubmitModal();
+        if (modalInfo && modalInfo.submitButton) {
+          modalSubmitBtn = modalInfo.submitButton;
+          break;
+        }
+        await sleep(200);
+      }
+
+      // Generic fallback check for any active modal with a Submit button
+      if (!modalSubmitBtn) {
+        const anyModal = document.querySelector('div[role="dialog"], div.rc-Modal, div.cds-dialog');
+        if (anyModal) {
+          const modalBtn = Array.from(anyModal.querySelectorAll("button, a.cds-button")).find(b => {
+            const text = (b.innerText || b.textContent || "").trim();
+            return /^submit$/i.test(text) || b.getAttribute("data-testid")?.includes("submit");
+          });
+          if (modalBtn) {
+            modalSubmitBtn = modalBtn;
+          }
+        }
+      }
+
+      if (!modalSubmitBtn) {
+        console.log("[Assignment Workflow] No confirmation modal dialog appeared (or submission already processed).");
+        return false;
+      }
+
+      console.log("[Assignment Workflow] 'Ready to submit?' modal detected. Automatically clicking modal Submit button (data-testid='dialog-submit-button')...");
+      await sleep(250);
+
+      try {
+        modalSubmitBtn.focus();
+        modalSubmitBtn.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, view: window }));
+        modalSubmitBtn.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+        modalSubmitBtn.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, view: window }));
+        modalSubmitBtn.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+        modalSubmitBtn.click();
+        console.log("[Assignment Workflow] Confirmation modal Submit button clicked successfully!");
+        return true;
+      } catch (err) {
+        console.error("[Assignment Workflow] Error clicking modal Submit button:", err);
+        try { modalSubmitBtn.click(); return true; } catch (_) { return false; }
+      }
+    }
+
+    /**
+     * Complete Post-Solve Auto-Submission Pipeline:
+     * 1. Automatically ticks the Honor Code agreement checkbox (#agreement-checkbox-base).
+     * 2. Waits 2 seconds for Coursera to auto-save the draft.
+     * 3. Automatically presses the in-page Submit button below the Honor Code (data-testid="submit-button").
+     * 4. Automatically confirms the "Ready to submit?" pop-up modal (data-testid="dialog-submit-button").
+     */
+    async function completeAssignmentSubmission() {
+      console.log("[Assignment Workflow] Initiating automated post-solve submission flow...");
+
+      notifyQuizProgress("submitting", {
+        message: "Ticking Honor Code agreement..."
+      });
+      const honorTicked = await tickHonorCodeCheckbox();
+
+      // Coursera auto-saves draft after ticking Honor Code; wait 2 full seconds as requested
+      notifyQuizProgress("submitting", {
+        message: "Waiting 2 seconds for draft to save..."
+      });
+      console.log("[Assignment Workflow] Honor Code checked. Waiting 2 seconds for draft to save...");
+      await sleep(2000);
+
+      notifyQuizProgress("submitting", {
+        message: "Submitting assignment..."
+      });
+      const submitClicked = await clickAssessmentSubmitButton();
+      await sleep(600);
 
       notifyQuizProgress("submitting", {
         message: "Confirming submission dialog..."

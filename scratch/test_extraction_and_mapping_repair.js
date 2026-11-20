@@ -149,9 +149,13 @@ class MockDOMNode {
       if (typeMatch && this.getAttribute("type") === typeMatch[1]) return true;
     }
 
-    if (sel.startsWith(".")) {
-      const cls = sel.slice(1);
-      return this.classList.has(cls);
+    if (sel.includes(".")) {
+      const dotIdx = sel.indexOf(".");
+      const prefixTag = sel.slice(0, dotIdx);
+      const clsPart = sel.slice(dotIdx + 1);
+      if (prefixTag && tag !== prefixTag.toLowerCase()) return false;
+      const classList = clsPart.split(".").filter(Boolean);
+      return classList.every(c => this.classList.has(c));
     }
 
     if (sel.startsWith("#")) {
@@ -765,7 +769,6 @@ function createBoundContext(sandbox) {
 
     // 3. Run solver
     const res = await exportsObj.solveQuiz();
-    console.log("Test 11 solveQuiz res:", JSON.stringify(res, null, 2));
     assert.strictEqual(res.ok, true, "Solver must complete successfully");
     assert.strictEqual(res.answeredCount, 1, "Must answer 1 question");
 
@@ -822,15 +825,24 @@ function createBoundContext(sandbox) {
     honorSection.appendChild(labelContainer);
     root.appendChild(honorSection);
 
-    // In-Page Submit Button below Honor Code
-    const submitBtn = new MockDOMNode("button", { "data-testid": "submit-button" }, "Submit");
+    // In-Page Submit Button below Honor Code (exact markup provided by user)
+    const submitBtn = new MockDOMNode("button", {
+      class: "cds-116 cds-button-disableElevation cds-button-primary css-dxhcv5",
+      "aria-label": "Submit",
+      "data-testid": "submit-button",
+      "aria-disabled": "true"
+    }, "Submit");
     submitBtn.disabled = true; // initially disabled until checkbox is checked!
     root.appendChild(submitBtn);
 
-    // Modal Dialog container
+    // Modal Dialog container with exact dialog-submit-button markup
     const modalDialog = new MockDOMNode("div", { role: "dialog", class: "cds-dialog" });
     const modalTitle = new MockDOMNode("h2", {}, "Ready to submit?");
-    const modalSubmitBtn = new MockDOMNode("button", { "data-testid": "confirm-submit-button" }, "Submit");
+    const modalSubmitBtn = new MockDOMNode("button", {
+      class: "cds-116 cds-button-disableElevation cds-button-primary css-1haxtzk",
+      "data-testid": "dialog-submit-button",
+      "aria-disabled": "false"
+    }, "Submit");
     const modalCancelBtn = new MockDOMNode("button", {}, "Cancel");
     modalDialog.appendChild(modalTitle);
     modalDialog.appendChild(modalSubmitBtn);
@@ -840,6 +852,7 @@ function createBoundContext(sandbox) {
     honorInput.click = function() {
       this.checked = true;
       submitBtn.disabled = false;
+      submitBtn.setAttribute("aria-disabled", "false");
     };
     submitBtn.click = function() {
       submitBtn.wasClicked = true;
@@ -856,16 +869,6 @@ function createBoundContext(sandbox) {
     const detectedCb = exportsObj.findHonorCodeCheckbox(honorSection);
     assert.strictEqual(detectedCb, honorInput, "findHonorCodeCheckbox must locate #agreement-checkbox-base");
 
-    const rawExtracted = exportsObj.extractQuestionsFromDOM();
-    console.log("Test 11 rawExtracted count:", rawExtracted ? rawExtracted.length : null);
-    if (!rawExtracted || rawExtracted.length === 0) {
-      const candidates = exportsObj.extractQuestionCandidates();
-      console.log("Test 11 candidates count:", candidates.length);
-      for (const c of candidates) {
-        console.log("Candidate validation:", exportsObj.validateQuestionCandidate(c));
-      }
-    }
-
     // 2. Mock AI solver
     exportsObj.aiSolverInstance.solveQuestions = async () => ({
       answers: [{ question: "What is 2 + 2?", answers: ["4"], confidence: 0.99 }],
@@ -875,7 +878,6 @@ function createBoundContext(sandbox) {
 
     // 3. Run solver
     const res = await exportsObj.solveQuiz();
-    console.log("Test 11 solveQuiz res:", JSON.stringify(res, null, 2));
     assert.strictEqual(res.ok, true, "Solver must complete successfully");
     assert.strictEqual(r1.checked, true, "Question option 4 must be checked");
 
