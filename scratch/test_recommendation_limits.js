@@ -186,6 +186,10 @@ const optInputsStart = contentCode.indexOf("function findQuestionOptionInputs(qu
 const optInputsEnd = contentCode.indexOf("function findCommonContainerForInputs(", optInputsStart);
 const optInputsFunc = contentCode.slice(optInputsStart, optInputsEnd);
 
+const visualStart = contentCode.indexOf("function detectVisualElements(");
+const visualEnd = contentCode.indexOf("function findVisibleQuestionElements() {", visualStart);
+const visualFunc = contentCode.slice(visualStart, visualEnd);
+
 const blockStart = contentCode.indexOf("function determineQuestionType(");
 const blockEnd = contentCode.indexOf("async function fillQuizAnswersInDOM(", blockStart);
 const blockCode = contentCode.slice(blockStart, blockEnd);
@@ -201,6 +205,7 @@ const setInputChecked = async (input, targetChecked) => {
 
 // Evaluate all the functions in a shared context
 const combinedCode = `
+${visualFunc}
 ${optInputsFunc}
 ${blockCode}
 

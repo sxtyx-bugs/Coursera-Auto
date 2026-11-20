@@ -225,6 +225,10 @@ const dockStart = contentCode.indexOf("function removeAutoSolveDock() {");
 const dockEnd = contentCode.indexOf("let launchedAssignmentPaths = new Set();", dockStart);
 const dockCode = contentCode.slice(dockStart, dockEnd);
 
+const visualStart = contentCode.indexOf("function detectVisualElements(");
+const visualEnd = contentCode.indexOf("function validateQuestionCompleteness(", visualStart);
+const visualFunc = contentCode.slice(visualStart, visualEnd);
+
 const sandbox = {
   console,
   document: mockDocument,
@@ -247,6 +251,7 @@ const sandbox = {
 
 const combinedCode = `
 ${getCleanFunc}
+${visualFunc}
 ${optInputsFunc}
 ${dockCode}
 ${blockCode}
