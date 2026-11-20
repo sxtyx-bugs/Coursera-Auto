@@ -178,35 +178,17 @@ global.window = {
 };
 global.Event = function(type) { return { type }; };
 
-// Load logic directly from content.js by extracting the recommendation functions
+// Load logic directly from content.js
 const fs = require("fs");
 const contentCode = fs.readFileSync("content.js", "utf8");
 
-function extractFunction(code, funcName) {
-  let marker = `async function ${funcName}(`;
-  let start = code.indexOf(marker);
-  if (start === -1) {
-    marker = `function ${funcName}(`;
-    start = code.indexOf(marker);
-  }
-  if (start === -1) throw new Error(`Could not find function ${funcName}`);
-  let depth = 0;
-  let bodyStart = -1;
-  let i = start;
-  while (i < code.length) {
-    if (code[i] === "{") {
-      depth++;
-      if (bodyStart === -1) bodyStart = i;
-    } else if (code[i] === "}") {
-      depth--;
-      if (depth === 0) {
-        return code.slice(start, i + 1);
-      }
-    }
-    i++;
-  }
-  throw new Error(`Could not parse function ${funcName}`);
-}
+const optInputsStart = contentCode.indexOf("function findQuestionOptionInputs(questionEl) {");
+const optInputsEnd = contentCode.indexOf("function findCommonContainerForInputs(", optInputsStart);
+const optInputsFunc = contentCode.slice(optInputsStart, optInputsEnd);
+
+const blockStart = contentCode.indexOf("function determineQuestionType(");
+const blockEnd = contentCode.indexOf("async function fillQuizAnswersInDOM(", blockStart);
+const blockCode = contentCode.slice(blockStart, blockEnd);
 
 const isAcademicIntegrityDeclaration = () => false;
 const getCleanVisibleText = (el) => (el?.innerText || el?.textContent || "").trim();
@@ -219,20 +201,13 @@ const setInputChecked = async (input, targetChecked) => {
 
 // Evaluate all the functions in a shared context
 const combinedCode = `
-${extractFunction(contentCode, "findQuestionOptionInputs")}
-${extractFunction(contentCode, "determineQuestionType")}
-${extractFunction(contentCode, "cleanStaleRecommendationBadges")}
-${extractFunction(contentCode, "scoreOptionMatch")}
-${extractFunction(contentCode, "matchOptionToAnswer")}
-${extractFunction(contentCode, "normalizeQuizAnswer")}
-${extractFunction(contentCode, "resolveQuestionRecommendations")}
-${extractFunction(contentCode, "applyQuestionAnswers")}
+${optInputsFunc}
+${blockCode}
 
 exports.findQuestionOptionInputs = findQuestionOptionInputs;
 exports.determineQuestionType = determineQuestionType;
 exports.cleanStaleRecommendationBadges = cleanStaleRecommendationBadges;
 exports.scoreOptionMatch = scoreOptionMatch;
-exports.matchOptionToAnswer = matchOptionToAnswer;
 exports.normalizeQuizAnswer = normalizeQuizAnswer;
 exports.resolveQuestionRecommendations = resolveQuestionRecommendations;
 exports.applyQuestionAnswers = applyQuestionAnswers;
@@ -328,7 +303,7 @@ function createMultiChoiceQuestion(qText, options) {
 // -------------------------------------------------------------
 // Test 1: Single-choice question with 4 options -> exactly 1 recommendation
 // -------------------------------------------------------------
-runAsyncTest("Test 1: Single-choice question displays EXACTLY ONE 'AI Recommended' badge", async () => {
+runAsyncTest("Test 1: Single-choice question selects EXACTLY ONE radio input without pill tags", async () => {
   const options = [
     "It is designed to perform a limited set of dedicated functions within a larger device",
     "It is required to support frequent hardware upgrades by end users",
@@ -346,8 +321,8 @@ runAsyncTest("Test 1: Single-choice question displays EXACTLY ONE 'AI Recommende
   const aiTags = questionEl.querySelectorAll(".coursera-ai-tag");
   const suggestedChoices = questionEl.querySelectorAll(".coursera-suggested-choice");
 
-  assert.strictEqual(aiTags.length, 1, `Must have exactly 1 AI Recommended tag, found ${aiTags.length}`);
-  assert.strictEqual(suggestedChoices.length, 1, `Must have exactly 1 suggested choice class, found ${suggestedChoices.length}`);
+  assert.strictEqual(aiTags.length, 0, `Pill tags must be 0 per minimal workflow, found ${aiTags.length}`);
+  assert.strictEqual(suggestedChoices.length, 0, `Suggested choice classes must be 0, found ${suggestedChoices.length}`);
   assert.strictEqual(res.recommendation.questionType, "single-choice");
   assert.strictEqual(res.recommendation.recommendedOptionIndexes.length, 1);
   assert.strictEqual(res.recommendation.recommendedOptionIndexes[0], 0);
@@ -360,7 +335,7 @@ runAsyncTest("Test 1: Single-choice question displays EXACTLY ONE 'AI Recommende
 // -------------------------------------------------------------
 // Test 2: Single-choice question where model returns multiple candidates -> resolves to 1 or verification
 // -------------------------------------------------------------
-runAsyncTest("Test 2: Single-choice question with multiple candidate answers NEVER renders multiple badges", async () => {
+runAsyncTest("Test 2: Single-choice question with multiple candidate answers NEVER selects multiple radios", async () => {
   const options = [
     "Dedicated controller unit for HVAC",
     "General purpose laptop computer",
@@ -379,16 +354,18 @@ runAsyncTest("Test 2: Single-choice question with multiple candidate answers NEV
   const aiTags = questionEl.querySelectorAll(".coursera-ai-tag");
   const suggestedChoices = questionEl.querySelectorAll(".coursera-suggested-choice");
 
-  assert.strictEqual(aiTags.length, 1, `Single-choice question MUST NEVER render > 1 badge. Found ${aiTags.length}`);
-  assert.strictEqual(suggestedChoices.length, 1, `Single-choice question MUST NEVER have > 1 suggested choice. Found ${suggestedChoices.length}`);
+  assert.strictEqual(aiTags.length, 0, `Pill tags must be 0 per minimal workflow. Found ${aiTags.length}`);
+  assert.strictEqual(suggestedChoices.length, 0, `Suggested choice classes must be 0. Found ${suggestedChoices.length}`);
   assert.strictEqual(res.recommendation.questionType, "single-choice");
   assert.strictEqual(res.recommendation.recommendedOptionIndexes.length, 1);
+  const checkedRadios = questionEl.querySelectorAll('input[type="radio"]').filter(r => r.checked);
+  assert.strictEqual(checkedRadios.length, 1, `Must have exactly 1 checked radio, found ${checkedRadios.length}`);
 });
 
 // -------------------------------------------------------------
 // Test 3: Multiple-choice question with 2 correct selections -> exactly 2 recommendations
 // -------------------------------------------------------------
-runAsyncTest("Test 3: Multiple-choice question with 2 correct answers renders exactly 2 recommendations", async () => {
+runAsyncTest("Test 3: Multiple-choice question with 2 correct answers selects exactly 2 checkboxes without pills", async () => {
   const options = [
     "Hard real-time guarantees",
     "Predictable execution timing",
@@ -406,8 +383,8 @@ runAsyncTest("Test 3: Multiple-choice question with 2 correct answers renders ex
   const aiTags = questionEl.querySelectorAll(".coursera-ai-tag");
   const suggestedChoices = questionEl.querySelectorAll(".coursera-suggested-choice");
 
-  assert.strictEqual(aiTags.length, 2, `Must have exactly 2 AI Recommended tags, found ${aiTags.length}`);
-  assert.strictEqual(suggestedChoices.length, 2, `Must have exactly 2 suggested choices, found ${suggestedChoices.length}`);
+  assert.strictEqual(aiTags.length, 0, `Pill tags must be 0 per minimal workflow, found ${aiTags.length}`);
+  assert.strictEqual(suggestedChoices.length, 0, `Suggested choices must be 0, found ${suggestedChoices.length}`);
   assert.strictEqual(res.recommendation.questionType, "multiple-choice");
   assert.deepStrictEqual(Array.from(res.recommendation.recommendedOptionIndexes), [0, 1]);
 
@@ -421,7 +398,7 @@ runAsyncTest("Test 3: Multiple-choice question with 2 correct answers renders ex
 // -------------------------------------------------------------
 // Test 4: Multiple-choice question with 1 correct selection -> exactly 1 recommendation
 // -------------------------------------------------------------
-runAsyncTest("Test 4: Multiple-choice question with 1 correct answer renders exactly 1 recommendation", async () => {
+runAsyncTest("Test 4: Multiple-choice question with 1 correct answer selects exactly 1 checkbox", async () => {
   const options = [
     "Microcontroller with on-chip flash",
     "Supercomputer cluster",
@@ -437,8 +414,10 @@ runAsyncTest("Test 4: Multiple-choice question with 1 correct answer renders exa
   const res = await applyQuestionAnswers(questionEl, answer);
 
   const aiTags = questionEl.querySelectorAll(".coursera-ai-tag");
-  assert.strictEqual(aiTags.length, 1);
+  assert.strictEqual(aiTags.length, 0);
   assert.deepStrictEqual(Array.from(res.recommendation.recommendedOptionIndexes), [0]);
+  const checkboxes = questionEl.querySelectorAll('input[type="checkbox"]');
+  assert.strictEqual(checkboxes[0].checked, true);
 });
 
 // -------------------------------------------------------------
@@ -450,18 +429,17 @@ runAsyncTest("Test 5: Re-running solver completely purges stale labels from earl
 
   // Pass 1: Provider suggests Option Alpha (Index 0)
   await applyQuestionAnswers(questionEl, { answers: ["Option Alpha"] });
-  let aiTags = questionEl.querySelectorAll(".coursera-ai-tag");
-  assert.strictEqual(aiTags.length, 1);
-  assert.strictEqual(aiTags[0].parentElement.children[0].value, "0");
+  const radios = questionEl.querySelectorAll('input[type="radio"]');
+  assert.strictEqual(radios[0].checked, true);
 
   // Pass 2: Provider fails over or user switches to different provider recommending Option Gamma (Index 2)
   await applyQuestionAnswers(questionEl, { answers: ["Option Gamma"] });
-  aiTags = questionEl.querySelectorAll(".coursera-ai-tag");
+  const aiTags = questionEl.querySelectorAll(".coursera-ai-tag");
   const suggested = questionEl.querySelectorAll(".coursera-suggested-choice");
 
-  assert.strictEqual(aiTags.length, 1, "Must not accumulate stale tags from pass 1");
-  assert.strictEqual(suggested.length, 1, "Must not keep stale suggested choice classes");
-  assert.strictEqual(aiTags[0].parentElement.children[0].value, "2", "Must point to the new recommended option");
+  assert.strictEqual(aiTags.length, 0, "No tags allowed");
+  assert.strictEqual(suggested.length, 0, "No suggested choice classes allowed");
+  assert.strictEqual(radios[2].checked, true, "Must point to the new recommended option");
 });
 
 // -------------------------------------------------------------
@@ -474,14 +452,13 @@ runAsyncTest("Test 6: Two questions on the same page keep recommendations 100% i
   await applyQuestionAnswers(q1, { answers: ["Q1 Opt B"] });
   await applyQuestionAnswers(q2, { answers: ["Q2 Opt C"] });
 
-  const q1Tags = q1.querySelectorAll(".coursera-ai-tag");
-  const q2Tags = q2.querySelectorAll(".coursera-ai-tag");
+  const q1Radios = q1.querySelectorAll('input[type="radio"]');
+  const q2Radios = q2.querySelectorAll('input[type="radio"]');
 
-  assert.strictEqual(q1Tags.length, 1, "Question 1 must have exactly 1 recommendation");
-  assert.strictEqual(q2Tags.length, 1, "Question 2 must have exactly 1 recommendation");
-
-  assert.strictEqual(q1Tags[0].parentElement.children[0].value, "1", "Q1 points to index 1");
-  assert.strictEqual(q2Tags[0].parentElement.children[0].value, "2", "Q2 points to index 2");
+  assert.strictEqual(q1Radios[1].checked, true, "Q1 points to index 1");
+  assert.strictEqual(q1Radios[0].checked, false);
+  assert.strictEqual(q2Radios[2].checked, true, "Q2 points to index 2");
+  assert.strictEqual(q2Radios[0].checked, false);
 });
 
 setTimeout(() => {

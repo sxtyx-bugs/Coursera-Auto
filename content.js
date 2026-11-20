@@ -1765,6 +1765,7 @@ ANSWER FORMAT RULES FOR "answers":
 - Single-choice MCQ or True/False: "answers" must be an array of 1 string: either the option letter (e.g. ["B"]) OR the exact matching option text.
 - Multiple-select MCQ: "answers" must be an array of all correct option letters (e.g. ["A", "C"]) OR all matching option texts.
 - Fill-in-the-blank or Short-answer: "answers" must be an array containing the exact required concise text string (e.g. ["microcontroller"]).
+- For mathematical questions (such as AVL trees, Big-O, formulas, exponents), return the exact option letter (e.g. ["A"]) or the exact option text (e.g. ["2^(h+1) - 1"]).
 - Preserve actual option labels and answer texts.
 
 Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include text outside the JSON.`;
@@ -2612,11 +2613,33 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       if (!element) return "";
       try {
         const clone = element.cloneNode(true);
+
+        // 1. Math preservation: preserve exponents, subscripts, KaTeX and MathJax
+        clone.querySelectorAll("sup").forEach(el => {
+          const text = el.textContent.trim();
+          el.replaceWith(document.createTextNode(text ? `^(${text})` : ""));
+        });
+        clone.querySelectorAll("sub").forEach(el => {
+          const text = el.textContent.trim();
+          el.replaceWith(document.createTextNode(text ? `_(${text})` : ""));
+        });
+        clone.querySelectorAll(".katex").forEach(katexEl => {
+          const texAnnotation = katexEl.querySelector('annotation[encoding*="tex"]');
+          const tex = texAnnotation ? texAnnotation.textContent.trim() : katexEl.textContent.trim();
+          katexEl.replaceWith(document.createTextNode(tex ? ` ${tex} ` : ""));
+        });
+        clone.querySelectorAll(".MathJax, .MathJax_Display, [class*='MathJax']").forEach(mjEl => {
+          const scriptTex = mjEl.querySelector('script[type*="math/tex"]');
+          const tex = scriptTex ? scriptTex.textContent.trim() : (mjEl.getAttribute("data-mathml") || mjEl.textContent.trim());
+          mjEl.replaceWith(document.createTextNode(tex ? ` ${tex} ` : ""));
+        });
+
+        // 2. Selectors to remove: exclude KaTeX and MathJax
         const removeSelectors = [
-          "script",
+          "script:not([type*='math/tex'])",
           "style",
           "noscript",
-          "[aria-hidden='true']",
+          "[aria-hidden='true']:not(.katex):not(.katex *):not([class*='katex']):not(.MathJax):not(.MathJax *)",
           "[hidden]",
           ".sr-only",
           ".visually-hidden",
@@ -3567,73 +3590,28 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     }
 
     /**
-     * Ensures the Swiss Editorial in-page Auto Solve dock is mounted on the assignment page.
-     */
-    function ensureAutoSolveDockMounted() {
-      let dock = document.getElementById("coursera-auto-solve-dock");
-      const activeModelName = aiSolverInstance ? aiSolverInstance.getActiveModelName() : "Groq • llama-3.3-70b";
-
-      if (!dock) {
-        dock = document.createElement("div");
-        dock.id = "coursera-auto-solve-dock";
-        dock.className = "coursera-auto-solve-dock";
-        dock.innerHTML = `
-          <div class="auto-solve-card">
-            <div class="auto-solve-header">
-              <div class="auto-solve-brand">
-                <span class="auto-solve-dot"></span>
-                <span class="auto-solve-title">Coursera Auto Solver</span>
-              </div>
-              <span id="auto-solve-provider-badge" class="auto-solve-provider-badge" title="Active AI Model">${activeModelName}</span>
-            </div>
-            <button id="coursera-auto-solve-trigger" class="auto-solve-btn" type="button">
-              ⚡ Auto Solve Assignment
-            </button>
-            <div id="auto-solve-status" class="auto-solve-status-bar">Ready to solve</div>
-          </div>
-        `;
-
-        document.body.appendChild(dock);
-
-        const triggerBtn = dock.querySelector("#coursera-auto-solve-trigger");
-        if (triggerBtn) {
-          triggerBtn.addEventListener("click", (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            solveQuiz();
-          });
-        }
-      } else {
-        const badge = dock.querySelector("#auto-solve-provider-badge");
-        if (badge && activeModelName) {
-          badge.textContent = activeModelName;
-        }
-      }
-    }
-
-    /**
-     * Removes the in-page Auto Solve dock when navigating away from an eligible assignment.
+     * Removes the in-page Auto Solve dock and any residual floating elements.
+     * Preserves clean minimalist Coursera interface without floating widgets.
      */
     function removeAutoSolveDock() {
-      const dock = document.getElementById("coursera-auto-solve-dock");
-      if (dock) {
-        dock.remove();
-      }
+      try {
+        const dock = document.getElementById("coursera-auto-solve-dock");
+        if (dock) {
+          dock.remove();
+        }
+        document.querySelectorAll(".coursera-auto-solve-dock").forEach(el => el.remove());
+        document.querySelectorAll(".coursera-ai-tag, .coursera-verification-tag").forEach(el => el.remove());
+        document.querySelectorAll(".coursera-suggested-choice").forEach(el => el.classList.remove("coursera-suggested-choice"));
+        document.querySelectorAll(".coursera-needs-verification").forEach(el => el.classList.remove("coursera-needs-verification"));
+      } catch (_) {}
     }
 
     /**
-     * Updates the status message in the in-page dock.
+     * Non-intrusive status logger for backwards compatibility.
+     * Prevents runtime errors while keeping the page 100% free of in-page floating widget DOM clutter.
      */
     function updateDockStatus(message, state = "info") {
-      const statusEl = document.getElementById("auto-solve-status");
-      if (statusEl) {
-        statusEl.textContent = message;
-        statusEl.className = "auto-solve-status-bar " + (
-          state === "error" ? "error" :
-          state === "warn" || state === "warning" ? "warn" :
-          state === "success" ? "success" : ""
-        );
-      }
+      // Floating UI removed per minimalist workflow requirements
     }
 
     let launchedAssignmentPaths = new Set();
@@ -3702,28 +3680,23 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       const attemptKey = getAssignmentAttemptKey();
 
       if (!autoQuizEnabled) {
-        console.log("[Assignment Workflow] Auto-quiz is toggled off in settings. Dock mounted for manual solve.");
-        ensureAutoSolveDockMounted();
+        console.log("[Assignment Workflow] Auto-quiz is toggled off in settings.");
         return;
       }
 
       if (!aiSolverInstance.hasConfiguredProvider()) {
-        console.log("[Assignment Workflow] No AI API key configured. Dock mounted for manual solve.");
-        ensureAutoSolveDockMounted();
+        console.log("[Assignment Workflow] No AI API key configured.");
         return;
       }
 
       if (autoSolvedAttemptKeys.has(attemptKey)) {
         // Already auto-solved for this attempt.
         // User navigating between questions or scrolling must NOT re-trigger solving.
-        ensureAutoSolveDockMounted();
         return;
       }
 
       // Mark attempt key immediately to avoid race conditions with asynchronous DOM events
       autoSolvedAttemptKeys.add(attemptKey);
-      ensureAutoSolveDockMounted();
-      updateDockStatus("Assignment test detected. Auto-solving in 500ms...", "info");
       console.log(`[Assignment Workflow] Automatically triggering solveQuiz for attempt: ${attemptKey}`);
 
       if (pendingAutoSolveTimeout) {
@@ -3760,7 +3733,6 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
               assignmentQuestionsObserver.disconnect();
               assignmentQuestionsObserver = null;
             }
-            ensureAutoSolveDockMounted();
             await triggerAutoSolveIfEligible();
           }
         }, 300);
@@ -3792,8 +3764,9 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     async function checkAndHandleAssignmentLaunch() {
       if (isLaunchingAssignment || isSolvingQuiz) return;
 
+      removeAutoSolveDock();
+
       if (!isEligibleAssignmentPage()) {
-        removeAutoSolveDock();
         if (assignmentQuestionsObserver) {
           assignmentQuestionsObserver.disconnect();
           assignmentQuestionsObserver = null;
@@ -3806,7 +3779,6 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
 
       // 1. If questions are already active and loaded in DOM
       if (hasLoadedAssignmentQuestions()) {
-        ensureAutoSolveDockMounted();
         if (assignmentQuestionsObserver) {
           assignmentQuestionsObserver.disconnect();
           assignmentQuestionsObserver = null;
@@ -3819,8 +3791,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       const startBtn = findAssignmentStartButton();
       if (startBtn) {
         if (launchedAssignmentPaths.has(currentPath)) {
-          // Already launched this attempt path once — keep dock mounted and wait for questions
-          ensureAutoSolveDockMounted();
+          // Already launched this attempt path once — wait for questions
           attachAssignmentQuestionsObserver();
           return;
         }
@@ -3844,8 +3815,6 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           const questionsLoaded = await waitForAssignmentQuestionsToLoad(15000);
           console.log(`[Assignment Workflow] Questions loaded after launch: ${questionsLoaded}`);
 
-          ensureAutoSolveDockMounted();
-
           if (questionsLoaded) {
             await triggerAutoSolveIfEligible();
           } else {
@@ -3867,7 +3836,6 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         currentPath.includes("/assignment-submission/") ||
         currentPath.includes("/assignment/")
       ) {
-        ensureAutoSolveDockMounted();
         attachAssignmentQuestionsObserver();
       }
     }
@@ -4243,6 +4211,24 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     }
 
     /**
+     * Normalizes mathematical notations, LaTeX formulas, superscripts, and Big-O symbols
+     * for invariant math matching across Coursera DOM and AI responses.
+     */
+    function normalizeMathText(str) {
+      if (!str) return "";
+      return str.toLowerCase()
+        .replace(/\\(text|mathrm|mathbf|mathit)\{([^}]+)\}/g, "$2")
+        .replace(/\\(log|ln|exp|sin|cos|tan|sqrt|omega|theta|sum|prod)/g, "$1")
+        .replace(/[{}]/g, "")
+        .replace(/\s+/g, "")
+        .replace(/\\cdot|\\times|\*/g, "*")
+        .replace(/\\le|\\leq|<=/g, "<=")
+        .replace(/\\ge|\\geq|>=/g, ">=")
+        .replace(/\\neq|!=/g, "!=")
+        .replace(/\^\{?([a-z0-9\+\-]+)\}?/g, "^($1)");
+    }
+
+    /**
      * Evaluates continuous match affinity (0-100) between an option element and normalized AI response.
      */
     function scoreOptionMatch(optInput, optIdx, optCleanText, normalized, totalOptions) {
@@ -4267,7 +4253,26 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         maxScore = Math.max(maxScore, 95);
       }
 
-      // 3. Text-based match
+      // 3. Mathematical expression match (AVL trees, exponents, Big-O, formulas)
+      if (normalized.texts.length > 0 && optCleanText) {
+        const mathOpt = normalizeMathText(optCleanText.replace(/^(?:option\s+)?\(?[a-z][\.\)\:\s]\s*/i, ""));
+        if (mathOpt && mathOpt.length >= 2) {
+          for (const ct of normalized.texts) {
+            if (typeof ct !== "string") continue;
+            const mathCt = normalizeMathText(ct.replace(/^(?:option\s+)?\(?[a-z][\.\)\:\s]\s*/i, ""));
+            if (mathCt && (mathOpt === mathCt)) {
+              maxScore = Math.max(maxScore, 95);
+              break;
+            }
+            if (mathCt && mathCt.length >= 3 && (mathOpt.includes(mathCt) || mathCt.includes(mathOpt))) {
+              maxScore = Math.max(maxScore, 85);
+              break;
+            }
+          }
+        }
+      }
+
+      // 4. Text-based match
       if (normalized.texts.length > 0 && optCleanText) {
         const normOpt = optCleanText.toLowerCase()
           .replace(/^(?:option\s+)?\(?[a-z][\.\)\:\s]\s*/i, "")
@@ -4582,17 +4587,6 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       const rec = resolveQuestionRecommendations(questionEl, answer, visibleOptions);
       const isMultiSelect = rec.questionType === "multiple-choice";
 
-      // If ambiguous or low-confidence single-choice, render Needs Verification tag on the container or choice
-      if (rec.needsVerification) {
-        const header = questionEl.querySelector('h2, h3, [class*="Prompt"], legend, div[role="heading"]') || questionEl;
-        if (header && !header.querySelector(".coursera-verification-tag")) {
-          const vTag = document.createElement("span");
-          vTag.className = "coursera-verification-tag";
-          vTag.textContent = "Needs verification ⚠️";
-          header.appendChild(vTag);
-        }
-      }
-
       for (let optIdx = 0; optIdx < visibleOptions.length; optIdx++) {
         const optInput = visibleOptions[optIdx];
 
@@ -4615,29 +4609,6 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           if (isRecommended) {
             const success = await setInputChecked(optInput, true);
             if (success) markedCount++;
-          }
-        }
-
-        // Visual feedback & recommendation badge
-        const label = optInput.closest("label") ||
-                      (optInput.id ? document.querySelector(`label[for="${optInput.id}"]`) : null) ||
-                      optInput.parentElement;
-        const choiceBox = label || optInput.parentElement;
-
-        if (choiceBox) {
-          if (isRecommended) {
-            choiceBox.classList.add("coursera-suggested-choice");
-            let tag = choiceBox.querySelector(".coursera-ai-tag");
-            if (!tag) {
-              tag = document.createElement("span");
-              tag.className = "coursera-ai-tag";
-              tag.textContent = "AI Recommended ✓";
-              choiceBox.appendChild(tag);
-            }
-          } else {
-            choiceBox.classList.remove("coursera-suggested-choice");
-            const tag = choiceBox.querySelector(".coursera-ai-tag");
-            if (tag) tag.remove();
           }
         }
       }
