@@ -158,6 +158,9 @@ class MockElement {
         if (s.includes('input[type="radio"]') && tag === "input" && el.type === "radio") return true;
         if (s.includes(".coursera-auto-solve-dock") && el.classList.contains("coursera-auto-solve-dock")) return true;
         if (s === "#coursera-auto-solve-dock" && el.id === "coursera-auto-solve-dock") return true;
+        if (s.includes("cds-116") || s.includes("css-g3vqgc") || s.includes("#main-container")) {
+          if (el.tagName === "SPAN" && el.parentElement?.classList?.contains("cds-116")) return true;
+        }
         return false;
       });
     };
@@ -177,6 +180,7 @@ class MockElement {
     while (curr) {
       const s = selector.toLowerCase();
       if (s === "label" && curr.tagName === "LABEL") return curr;
+      if (s === "button" && curr.tagName === "BUTTON") return curr;
       if (s.includes("dialog") && (curr.getAttribute("role") === "dialog" || curr.classList.contains("cds-dialog") || curr.classList.contains("rc-Modal"))) return curr;
       if (s.includes("honor") && (curr.className.toLowerCase().includes("honor") || (curr.attributes["data-testid"] || "").includes("honor"))) return curr;
       curr = curr.parentElement;
@@ -205,7 +209,7 @@ const mockDocument = {
 const contentCode = fs.readFileSync("content.js", "utf8");
 
 // Slice the functions
-const startFuncStart = contentCode.indexOf("function isEligibleAssignmentPage() {");
+const startFuncStart = contentCode.indexOf("const EXACT_START_SPAN_SELECTOR =");
 const startFuncEnd = contentCode.indexOf("let launchedAssignmentPaths = new Set();", startFuncStart);
 const workflowCoreCode = contentCode.slice(startFuncStart, startFuncEnd);
 
@@ -339,6 +343,27 @@ runTest("Scenario 1E: handlePreQuizModals NEVER clicks 'Ready to submit?' post-s
   assert.strictEqual(handled, false, "Must strictly ignore post-submit Ready to submit? modal");
   assert.strictEqual(submitBtn.clickedTimes, 0, "Submit button must NOT be clicked");
   submitModal.remove();
+});
+
+runTest("Scenario 1F: Exact confirmed Coursera DevTools selector locates span and button parent", () => {
+  mockDocument.body.children = [];
+
+  const main = new MockElement("div", { id: "main-container" });
+  const article = new MockElement("article");
+  const btn = new MockElement("button", {
+    class: "cds-116 cds-button-disableElevation cds-button-primary css-g3vqgc"
+  });
+  const span = new MockElement("span", {}, "Start assignment");
+  btn.appendChild(span);
+  article.appendChild(btn);
+  main.appendChild(article);
+  mockDocument.body.appendChild(main);
+
+  const startBtn = findAssignmentStartButton();
+  assert.ok(startBtn, "Must find Start assignment button via exact selector");
+  assert.strictEqual(startBtn.tagName, "BUTTON", "Parent must be actual BUTTON element");
+  assert.strictEqual(startBtn.textContent.trim(), "Start assignment");
+  assert.strictEqual(isSubmitButtonEnabled(startBtn), true, "Button must be enabled");
 });
 
 // ==================================================================

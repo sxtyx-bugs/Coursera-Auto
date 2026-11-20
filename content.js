@@ -3595,8 +3595,17 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
      * Activates ONLY on Practical Assignments, Graded Assignments, and assessment links.
      * Excludes normal lectures, reading materials, discussions, and coach widgets.
      */
+    /**
+     * Confirmed exact Coursera selector verified directly in Coursera DevTools:
+     */
+    const EXACT_START_SPAN_SELECTOR = '#main-container > div.css-1bu5epf > div > div > div > div > article > div.css-i78ge5 > div.css-1y89sx6 > div.css-1ieirtn > button.cds-116.cds-button-disableElevation.cds-button-primary.css-g3vqgc > span';
+
+    /**
+     * Determines if current Coursera page is an active or upcoming assessment.
+     */
     function isEligibleAssignmentPage() {
       const pathname = (window.location.pathname || "").toLowerCase();
+      console.log(`[Coursera Extension] isEligibleAssignmentPage() evaluation for path: "${pathname}"`);
 
       // Exclude non-assignment views immediately
       if (
@@ -3608,15 +3617,29 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         pathname.includes("/ungradedwidget/") ||
         pathname.includes("/home")
       ) {
+        console.log(`[Coursera Extension] Path "${pathname}" is explicitly a non-assignment route.`);
         return false;
       }
 
       // Check if lecture video or reading item is currently on screen
       if (document.querySelector('video, .rc-VideoPlayer, div[data-testid="video-player"], .rc-ReadingItem, div[data-testid="reading-content"]')) {
+        console.log("[Coursera Extension] Video player or reading content element is active on screen.");
         return false;
       }
 
-      // 1. Check Coursera item header pill or type title
+      // 1. Direct check: Start Assignment button present on page (Screenshot 1)
+      if (findAssignmentStartButton()) {
+        console.log("[Coursera Extension] Eligibility confirmed: Verified Start Assignment button found in DOM.");
+        return true;
+      }
+
+      // 2. Questions already active in DOM
+      if (hasLoadedAssignmentQuestions()) {
+        console.log("[Coursera Extension] Eligibility confirmed: Assessment question elements found in DOM.");
+        return true;
+      }
+
+      // 3. Check Coursera item header pill or type title
       const pillSelectors = [
         '[data-testid="item-type-pill"]',
         '.rc-ItemContentHeader',
@@ -3632,34 +3655,24 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         if (el && isElementVisible(el)) {
           const txt = (el.innerText || el.textContent || "").toLowerCase();
           if (/\b(graded assignment|practical assignment|practice assignment|peer-graded assignment|programming assignment|assignment|graded quiz|practice quiz|quiz|exam|assessment)\b/i.test(txt)) {
+            console.log(`[Coursera Extension] Eligibility confirmed: Header pill matches "${txt}".`);
             return true;
           }
         }
       }
 
-      // Check visible headings and labels for assignment indicators (Screenshot 1)
+      // 4. Check visible headings and labels for assignment indicators
       const pageHeadings = Array.from(document.querySelectorAll('h1, h2, h3, [role="heading"], div[class*="title" i], p, span'));
       for (const h of pageHeadings) {
         if (!isElementVisible(h)) continue;
         const txt = (h.innerText || h.textContent || "").trim();
         if (/\b(graded assignment|practical assignment|practice assignment|peer-graded assignment|programming assignment|graded quiz|practice quiz)\b/i.test(txt)) {
-          if (findAssignmentStartButton() || hasLoadedAssignmentQuestions()) {
-            return true;
-          }
+          console.log(`[Coursera Extension] Eligibility confirmed: Page heading matches "${txt}".`);
+          return true;
         }
       }
 
-      // 2. Check if assignment questions are already in DOM
-      if (hasLoadedAssignmentQuestions()) {
-        return true;
-      }
-
-      // 3. Check for assignment start button on landing page
-      if (findAssignmentStartButton()) {
-        return true;
-      }
-
-      // 4. URL pathname structure check
+      // 5. URL pathname structure check
       if (
         pathname.includes("/exam/") ||
         pathname.includes("/quiz/") ||
@@ -3667,17 +3680,75 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         pathname.includes("/assignment/") ||
         pathname.endsWith("/attempt")
       ) {
+        console.log(`[Coursera Extension] Eligibility confirmed: Path structure indicates assessment "${pathname}".`);
         return true;
       }
 
+      console.log(`[Coursera Extension] Page not recognized as an eligible assessment page: "${pathname}".`);
       return false;
     }
 
     /**
      * Finds the Start / Resume Assignment button on an assignment landing page (Screenshot 1).
-     * Uses accessible names and DOM semantics; never confuses with "Help me practice" or unrelated buttons.
+     * Uses confirmed selector from Coursera DevTools and validates existence, visibility, enabled state, and text.
      */
     function findAssignmentStartButton() {
+      // 1. Primary: Confirmed exact selector tested in Coursera DevTools
+      try {
+        const span = document.querySelector(EXACT_START_SPAN_SELECTOR);
+        if (span) {
+          const button = span.closest('button');
+          if (button) {
+            const exists = Boolean(button && button.isConnected);
+            const visible = isElementVisible(button);
+            const enabled = !button.disabled && button.getAttribute("aria-disabled") !== "true" && !button.classList?.contains("disabled");
+            const rawText = (button.innerText || button.textContent || span.innerText || span.textContent || "").trim();
+            const isStartText = /start\s+assignment/i.test(rawText);
+
+            console.log("[Coursera Extension] Exact selector match found:", {
+              selector: EXACT_START_SPAN_SELECTOR,
+              exists,
+              visible,
+              enabled,
+              text: rawText,
+              isStartText
+            });
+
+            if (exists && visible && enabled && isStartText) {
+              console.log("[Coursera Extension] ✓ Confirmed exact Start Assignment button verified!");
+              return button;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("[Coursera Extension] Error during exact start button check:", err);
+      }
+
+      // 2. Scoped article / primary button search (resilient against dynamic CSS class hashes)
+      try {
+        const articleButtons = Array.from(document.querySelectorAll('article button, [role="article"] button, div[class*="cds-button"] button, button.cds-button-primary, button[class*="button-primary" i]'));
+        for (const btn of articleButtons) {
+          if (!isElementVisible(btn)) continue;
+          if (btn.closest('div[role="dialog"], div.rc-Modal, div.cds-dialog, div[class*="modal" i]')) continue;
+
+          const text = (btn.innerText || btn.textContent || btn.getAttribute("aria-label") || "").trim();
+          if (/help\s+me\s+practice/i.test(text)) continue;
+
+          const exists = Boolean(btn && btn.isConnected);
+          const visible = isElementVisible(btn);
+          const enabled = !btn.disabled && btn.getAttribute("aria-disabled") !== "true" && !btn.classList?.contains("disabled");
+          const isStartText = /^(start\s+assignment|start\s+quiz|start\s+attempt|resume\s+assignment|resume\s+quiz)$/i.test(text.toLowerCase());
+
+          if (exists && visible && enabled && isStartText) {
+            console.log(`[Coursera Extension] Scoped article search found start button ("${text}").`);
+            return btn;
+          }
+        }
+      } catch (err) {
+        console.warn("[Coursera Extension] Error during article button search:", err);
+      }
+
+      // 3. Fallback: Classic Coursera testid and generic selectors
       const startButtonSelectors = [
         'button[data-testid="start-assignment-button"]',
         'a[data-testid="start-assignment-button"]',
@@ -3699,14 +3770,12 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           const elements = Array.from(document.querySelectorAll(sel));
           for (const el of elements) {
             if (!isElementVisible(el)) continue;
-            // Exclude buttons inside modal dialogs
             if (el.closest('div[role="dialog"], div.rc-Modal, div.cds-dialog, div[class*="modal" i]')) continue;
 
             const text = (el.innerText || el.textContent || el.getAttribute("aria-label") || "").trim().toLowerCase();
             const dataTestId = (el.getAttribute("data-testid") || "").toLowerCase();
             const href = (el.getAttribute("href") || "").toLowerCase();
 
-            // Strict safety: Never match "Help me practice"
             if (text.includes("help me practice")) continue;
 
             if (
@@ -3716,13 +3785,14 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
               dataTestId === "start-quiz-button" ||
               href.endsWith("/attempt")
             ) {
-              return el;
+              const button = el.tagName === "BUTTON" || el.tagName === "A" ? el : el.closest("button, a");
+              if (button) return button;
             }
           }
         } catch (_) {}
       }
 
-      // Broad search by visible button text & accessible name
+      // 4. Broad search by visible button text & accessible name
       const allButtons = Array.from(document.querySelectorAll("button, a.cds-button, [role='button']"));
       for (const btn of allButtons) {
         if (!isElementVisible(btn)) continue;
@@ -4181,9 +4251,36 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       }
 
       // 3. If on an assignment landing/overview page with a Start button
+      console.log("[Coursera Extension] Step 3: Checking for Start Assignment button...");
       const startBtn = findAssignmentStartButton();
       if (startBtn) {
+        console.log("[Coursera Extension] Start button detected in DOM. Current path:", currentPath);
         if (launchedAssignmentPaths.has(currentPath)) {
+          console.log(`[Coursera Extension] Path "${currentPath}" already recorded in launchedAssignmentPaths. Waiting for attempt navigation.`);
+          return;
+        }
+
+        // Before clicking, verify:
+        // - Button exists
+        // - Button is visible
+        // - Button is enabled
+        // - Button text is "Start assignment"
+        const exists = Boolean(startBtn && startBtn.isConnected);
+        const visible = isElementVisible(startBtn);
+        const enabled = !startBtn.disabled && startBtn.getAttribute("aria-disabled") !== "true" && !startBtn.classList?.contains("disabled");
+        const rawText = (startBtn.innerText || startBtn.textContent || "").trim();
+        const isStartText = /start\s+assignment/i.test(rawText);
+
+        console.log(`[Coursera Extension] Pre-click verification: exists=${exists}, visible=${visible}, enabled=${enabled}, text="${rawText}", isStartText=${isStartText}`);
+
+        if (!exists || !visible || !enabled || !isStartText) {
+          console.warn("[Coursera Extension] Button failed pre-click verification criteria. Aborting click.", {
+            exists,
+            visible,
+            enabled,
+            rawText,
+            isStartText
+          });
           return;
         }
 
@@ -4191,37 +4288,75 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         launchedAssignmentPaths.add(currentPath);
 
         try {
-          const btnText = (startBtn.innerText || startBtn.textContent || "").trim();
-          console.log(`[Assignment Workflow] Eligible assignment detected. Auto-launching (${btnText})...`);
+          console.log(`[Coursera Extension] Executing click on Start Assignment button ("${rawText}")...`);
 
+          startBtn.focus();
           startBtn.scrollIntoView({ behavior: "smooth", block: "center" });
           await sleep(250);
+
+          // Native click + synthetic MouseEvents
           startBtn.click();
-          await sleep(500);
+          try {
+            startBtn.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+            startBtn.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+            startBtn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+          } catch (_) {}
+
+          console.log("[Coursera Extension] Start Assignment click executed. Handling pre-quiz dialogs & awaiting navigation...");
+          await sleep(600);
 
           // Handle any pre-quiz modal confirmation dialog ("Continue" / "Start Attempt")
           await handlePreQuizModals();
 
-          // Wait exactly 4 seconds after navigation / assignment initialization
-          console.log("[Assignment Workflow] Waiting exactly 4 seconds after assignment initialization...");
-          await sleep(4000);
+          // Wait for page to navigate or initialize
+          const navStartTime = Date.now();
+          let navigated = false;
+          while (Date.now() - navStartTime < 8000) {
+            await sleep(400);
+            await handlePreQuizModals();
+            const currHref = window.location.href;
+            const currPath = window.location.pathname;
+            if (
+              currHref.includes("/attempt") ||
+              currPath.endsWith("/attempt") ||
+              currPath.includes("/assignment-submission/") ||
+              hasLoadedAssignmentQuestions()
+            ) {
+              navigated = true;
+              console.log(`[Coursera Extension] Navigation to attempt route confirmed: "${currHref}"`);
+              break;
+            }
+          }
 
-          // Wait for actual assignment questions to render in DOM
+          if (!navigated) {
+            console.warn("[Coursera Extension] Navigation to attempt not detected within 8s. Releasing launchedAssignmentPaths.");
+            launchedAssignmentPaths.delete(currentPath);
+          }
+
+          // Wait 5 seconds initialization delay after navigation/attempt detection
+          console.log("[Coursera Extension] Waiting 5 seconds initialization delay after navigation/attempt detection...");
+          await sleep(5000);
+
+          // Wait for question DOM readiness (up to 15s)
+          console.log("[Coursera Extension] Waiting for assignment questions to render...");
           const questionsLoaded = await waitForAssignmentQuestionsToLoad(15000);
-          console.log(`[Assignment Workflow] Questions loaded after launch: ${questionsLoaded}`);
+          console.log(`[Coursera Extension] Questions loaded: ${questionsLoaded}`);
 
           if (questionsLoaded) {
-            await waitForQuestionsContentStable(6000);
+            console.log("[Coursera Extension] Verifying question content stability...");
+            await waitForQuestionsContentStable(10000);
           }
 
           // Release launch lock prior to auto-solve evaluation
           isLaunchingAssignment = false;
 
           if (questionsLoaded) {
+            console.log("[Coursera Extension] Triggering AI solver exactly once for attempt...");
             await triggerAutoSolveIfEligible();
           }
         } catch (err) {
-          console.error("[Assignment Workflow] Error launching assignment:", err);
+          console.error("[Coursera Extension] Error during Start Assignment workflow:", err);
+          launchedAssignmentPaths.delete(currentPath);
         } finally {
           isLaunchingAssignment = false;
         }
@@ -4299,8 +4434,17 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           } catch (_) {}
         }
 
-        // Check embedded coach widget fallback
+        // Check landing page Start button or embedded coach widget fallback
         if (!parsedQuestions || parsedQuestions.length === 0) {
+          // If on an overview/landing page with a Start button, initiate launch!
+          const startBtn = findAssignmentStartButton();
+          if (startBtn) {
+            console.log("[AI Solver] Start Assignment button present on landing page. Triggering assignment launch...");
+            isSolvingQuiz = false;
+            await checkAndHandleAssignmentLaunch();
+            return;
+          }
+
           const currentUrl = window.location.href;
           if (currentUrl.includes("/coach/") || currentUrl.includes("/ungradedwidget/")) {
             updateDockStatus("Solving dialogue / widget...", "info");
