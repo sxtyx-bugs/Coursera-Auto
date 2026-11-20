@@ -170,7 +170,7 @@
             if (chrome.runtime.lastError || !progRes || !progRes.payload) return;
             const prog = progRes.payload;
             if (statusEl) {
-              if (prog.state === "solving" || prog.state === "filling_answers" || prog.state === "loading_questions") {
+              if (prog.state === "solving" || prog.state === "filling_answers" || prog.state === "submitting" || prog.state === "loading_questions") {
                 statusEl.textContent = prog.message || "Solving active quiz...";
                 statusEl.style.color = "#0284c7";
               } else if (prog.state === "completed" && prog.message) {
@@ -736,8 +736,11 @@
         const statusEl = document.getElementById("key-status");
         if (statusEl) {
           if (payload.state === "completed") {
-            statusEl.textContent = payload.message || "✓ All questions filled & verified. Please review & submit.";
+            statusEl.textContent = payload.message || "✓ All questions answered & assignment submitted.";
             statusEl.style.color = "#10b981";
+          } else if (payload.state === "submitting") {
+            statusEl.textContent = payload.message || "Submitting assignment...";
+            statusEl.style.color = "#0284c7";
           } else if (payload.state === "error") {
             statusEl.textContent = `✗ ${payload.message || "Quiz solver error"}`;
             statusEl.style.color = "#ef4444";

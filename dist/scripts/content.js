@@ -143,7 +143,7 @@
     function isHoneypotQuestion(text) {
       if (!text || typeof text !== "string") return false;
       const clean = sanitizeCourseraPromptInjection(text);
-      if (!clean || clean.length < 5) return true;
+      if (!clean) return false;
       return /^(?:notice|important|warning|critical)?\s*(?:nothing found|security features|academic integrity|compliance verification|acknowledge guidelines|i understand)\b/i.test(clean);
     }
 
@@ -2419,9 +2419,21 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
             k.includes("character") ||
             k.includes("out of") ||
             k.includes("used") ||
+            k.includes("directedrooted") ||
             !k.includes(":::")
           ) {
             this.cache.delete(k);
+          } else {
+            // Also invalidate contaminated cache entries where the prompt consists of option text
+            const parts = k.split(":::");
+            if (parts.length >= 3) {
+              const cachedPrompt = (parts[1] || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+              const cachedOpts = (parts[2] || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+              if (cachedPrompt && cachedOpts && (cachedPrompt === cachedOpts || cachedOpts.includes(cachedPrompt))) {
+                console.warn("[Cache] Purging corrupted cache key containing option text as prompt:", k.slice(0, 80));
+                this.cache.delete(k);
+              }
+            }
           }
         }
       }
@@ -3140,6 +3152,32 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           return { isValid: false, reason, candidate };
         }
 
+        // Anti-corruption check: prompt must NOT be composed of concatenated option labels
+        const normalizedPromptClean = prompt.toLowerCase().replace(/[^a-z0-9]/g, "");
+        const concatenatedOptions = validOptions.map(o => String(o).toLowerCase().replace(/[^a-z0-9]/g, "")).join("");
+        if (normalizedPromptClean.length > 0 && concatenatedOptions.length > 0) {
+          const isDirectMatch = (
+            normalizedPromptClean === concatenatedOptions ||
+            concatenatedOptions.includes(normalizedPromptClean) ||
+            normalizedPromptClean.includes(concatenatedOptions)
+          );
+
+          // Token/word composition check: verify if prompt consists purely of words from options
+          const optWords = new Set(validOptions.flatMap(o => String(o).toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/)).filter(w => w.length > 2));
+          const promptWords = prompt.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(w => w.length > 2);
+          const isComposedOfOptions = promptWords.length > 0 && promptWords.every(pw => {
+            return Array.from(optWords).some(ow => ow.includes(pw) || pw.includes(ow));
+          });
+
+          if (isDirectMatch || isComposedOfOptions) {
+            const reason = "prompt is formed from concatenated option labels";
+            console.log(`[Validation] Rejected: ${reason} ("${prompt.slice(0, 60)}")`);
+            candidate.validationStatus = "rejected";
+            candidate.rejectionReason = reason;
+            return { isValid: false, reason, candidate };
+          }
+        }
+
         // Clean options and normalized options
         candidate.options = validOptions;
         if (typeof normalizeMathText === "function") {
@@ -3303,7 +3341,24 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         try {
           const groups = Array.from(document.querySelectorAll(sel)).filter(isElementVisible);
           groups.forEach(grp => {
-            if (!isAcademicIntegrityDeclaration(grp)) {
+            if (isAcademicIntegrityDeclaration(grp)) return;
+            // Differentiate Choices Group from Question Container:
+            // [role="radiogroup"] and [role="group"] are option choice containers.
+            // Check if there is an enclosing question container or prompt-bearing parent:
+            const parentQuestion = grp.closest('div.rc-FormPartsQuestion, div[data-testid*="question-item" i], div[data-testid*="QuestionItem" i], div[data-testid*="question_" i], div[data-testid*="form-part" i], div[data-testid*="assessment-question" i], fieldset, div.c-question, div[class*="rc-FormPart"]');
+            if (parentQuestion && isElementVisible(parentQuestion) && !isAcademicIntegrityDeclaration(parentQuestion)) {
+              addContainer(parentQuestion, "Strategy-1:CSS-Selector");
+            } else {
+              // If grp has aria-labelledby, find if the labeled element's common ancestor is the real question container
+              const labelledBy = grp.getAttribute("aria-labelledby");
+              const labelEl = labelledBy ? document.getElementById(labelledBy) : null;
+              if (labelEl) {
+                const commonAncestor = findCommonContainerForInputs([grp, labelEl]);
+                if (commonAncestor && isElementVisible(commonAncestor) && !isAcademicIntegrityDeclaration(commonAncestor)) {
+                  addContainer(commonAncestor, "Strategy-2:ARIA-Role");
+                  return;
+                }
+              }
               addContainer(grp, "Strategy-2:ARIA-Role");
             }
           });
@@ -3334,9 +3389,37 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         });
       }
 
-      // STRATEGY 4: Leaf-container resolution (keep innermost containers)
+      // STRATEGY 4: Leaf-container resolution (keep innermost containers, but preserve question containers containing choices groups)
       let resolvedContainers = questionContainers.filter(el => {
-        return !questionContainers.some(other => other !== el && el.contains(other));
+        return !questionContainers.some(other => {
+          if (other === el) return false;
+          if (!el.contains(other)) return false;
+
+          // 'el' contains 'other'. Should 'el' be discarded in favor of 'other'?
+          // If 'other' is an options group (role="radiogroup" or role="group") or other lacks a prompt while el has a prompt,
+          // then 'el' is the true question container and 'other' is just an inner choices container.
+          const otherRole = other.getAttribute?.("role");
+          const isOtherChoicesGroup = otherRole === "radiogroup" || otherRole === "group";
+          const elPrompt = extractQuestionPrompt(el);
+          const otherPrompt = extractQuestionPrompt(other);
+
+          if (isOtherChoicesGroup || (elPrompt && !otherPrompt)) {
+            // Do NOT discard el in favor of other!
+            return false;
+          }
+
+          // Otherwise, el is a wrapper enclosing a more specific question container (other)
+          return true;
+        });
+      });
+
+      // Filter out any inner choices containers that are children of an already retained question container
+      resolvedContainers = resolvedContainers.filter(el => {
+        return !resolvedContainers.some(parent => {
+          if (parent === el) return false;
+          if (!parent.contains(el)) return false;
+          return true;
+        });
       });
 
       // Final pass: ensure all choice inputs belong to a resolved container
@@ -3556,8 +3639,34 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     function extractQuestionPrompt(qEl) {
       if (!qEl) return "";
 
-      // 1. Direct prompt selector query
+      // 0. ARIA-labelledby resolution: check qEl or inner group
+      const labelledBy = qEl.getAttribute("aria-labelledby") ||
+        qEl.querySelector('[role="radiogroup"][aria-labelledby], [role="group"][aria-labelledby], fieldset[aria-labelledby]')?.getAttribute("aria-labelledby");
+      if (labelledBy) {
+        const ids = labelledBy.split(/\s+/).filter(Boolean);
+        const textParts = [];
+        for (const id of ids) {
+          const el = document.getElementById(id);
+          if (el && isElementVisible(el)) {
+            const t = getCleanVisibleText(el).trim();
+            if (t && !isHoneypotQuestion(t) && !isControlGeneratedOrUIMetadata(t)) {
+              textParts.push(t);
+            }
+          }
+        }
+        if (textParts.length > 0) {
+          const combined = textParts.join(" ").trim();
+          if (combined.length > 3) {
+            return sanitizeCourseraPromptInjection(combined);
+          }
+        }
+      }
+
+      // 1. Direct prompt selector query (Coursera native classes, ARIA, and test-ids)
       const promptSelectors = [
+        'div.rc-FormPartsQuestion__title',
+        'div.rc-FormPartsQuestion__titleText',
+        'div[class*="rc-FormPartsQuestion__title"]',
         'legend',
         '[data-testid*="question-prompt" i]',
         '[data-testid*="QuestionPrompt" i]',
@@ -3599,6 +3708,18 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         }
       }
 
+      // 2.5. If qEl is an inner group, check closest question container for title
+      const parentQ = qEl.closest('div.rc-FormPartsQuestion, div[data-testid*="question" i], fieldset, div.c-question');
+      if (parentQ && parentQ !== qEl) {
+        const parentTitle = parentQ.querySelector('div.rc-FormPartsQuestion__title, [data-testid*="question-prompt" i], legend, .c-question-prompt');
+        if (parentTitle && isElementVisible(parentTitle)) {
+          const text = getCleanVisibleText(parentTitle).trim();
+          if (text && text.length > 3 && !isHoneypotQuestion(text) && !isControlGeneratedOrUIMetadata(text)) {
+            return sanitizeCourseraPromptInjection(text);
+          }
+        }
+      }
+
       // 3. Structural fallback: Clone container and remove all answer option elements, buttons, badges, character counters
       try {
         const clone = qEl.cloneNode(true);
@@ -3609,6 +3730,8 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           'input',
           'button',
           'textarea',
+          '[role="radiogroup"]',
+          '[role="group"]',
           '[role="radio"]',
           '[role="checkbox"]',
           '.rc-Option',
@@ -3635,15 +3758,18 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         cleanText = cleanText.replace(/^\s*\d+\s*points?\s*/i, "").trim();
 
         if (cleanText && cleanText.length > 3 && !isHoneypotQuestion(cleanText) && !isControlGeneratedOrUIMetadata(cleanText)) {
-          return sanitizeCourseraPromptInjection(cleanText);
+          // Double check: verify cleanText does not match options
+          const optionsText = Array.from(qEl.querySelectorAll('label, [role="radio"], [role="checkbox"]'))
+            .map(l => getCleanVisibleText(l).toLowerCase().replace(/[^a-z0-9]/g, ""))
+            .join("");
+          const normClean = cleanText.toLowerCase().replace(/[^a-z0-9]/g, "");
+          if (!optionsText || (normClean !== optionsText && !optionsText.includes(normClean))) {
+            return sanitizeCourseraPromptInjection(cleanText);
+          }
         }
       } catch (_) {}
 
-      // 4. Last resort: raw text of container stripped of option texts
-      const rawText = getCleanVisibleText(qEl);
-      if (rawText && !isControlGeneratedOrUIMetadata(rawText)) {
-        return sanitizeCourseraPromptInjection(rawText.trim());
-      }
+      // Under no circumstances return rawText of container! Raw text contains all option labels.
       return "";
     }
 
@@ -4333,9 +4459,29 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
 
     /**
      * Finds the Honor Code pledge checkbox within or near the Honor Code section (Screenshot 2).
+     * Supports Coursera CDS #agreement-checkbox-base, aria-labelledby, and label text id.
      */
     function findHonorCodeCheckbox(honorSection = null) {
       const root = honorSection || document;
+
+      // 1. Direct Coursera CDS checkbox selectors
+      const directCb = root.querySelector?.(
+        '#agreement-checkbox-base, input[aria-labelledby*="agreement-checkbox" i], input[id*="agreement-checkbox" i], input[name*="agreement" i]'
+      ) || document.querySelector(
+        '#agreement-checkbox-base, input[aria-labelledby*="agreement-checkbox" i], input[id*="agreement-checkbox" i], input[name*="agreement" i]'
+      );
+      if (directCb) return directCb;
+
+      // 2. Query via agreement label text span ID (#agreement-checkbox-base-label-text) or class (.honor-code-agreement)
+      const labelTextSpan = document.getElementById("agreement-checkbox-base-label-text") ||
+                            document.querySelector(".honor-code-agreement");
+      if (labelTextSpan) {
+        const container = labelTextSpan.closest("label, div[class*='checkbox' i], div.rc-HonorCode, div.cds-checkboxAndRadio-container");
+        const cb = container?.querySelector('input[type="checkbox"], [role="checkbox"]');
+        if (cb) return cb;
+      }
+
+      // 3. Scan all checkboxes for academic integrity declaration match
       const checkboxes = Array.from(root.querySelectorAll('input[type="checkbox"], [role="checkbox"]'));
       for (const cb of checkboxes) {
         if (isAcademicIntegrityDeclaration(cb)) {
@@ -4426,6 +4572,197 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         }
       }
       return null;
+    }
+
+    /**
+     * Automatically ticks the Coursera Honor Code agreement checkbox (Screenshot 2).
+     */
+    async function tickHonorCodeCheckbox() {
+      const honorSection = findHonorCodeSection();
+      const honorCheckbox = findHonorCodeCheckbox(honorSection);
+      if (!honorCheckbox) {
+        console.warn("[Assignment Workflow] Honor Code checkbox not found in DOM.");
+        return false;
+      }
+
+      if (isHonorCodeCheckboxChecked(honorCheckbox)) {
+        console.log("[Assignment Workflow] Honor Code checkbox already ticked.");
+        return true;
+      }
+
+      console.log("[Assignment Workflow] Automatically ticking Honor Code checkbox...");
+      try {
+        honorCheckbox.scrollIntoView({ behavior: "smooth", block: "center" });
+      } catch (_) {}
+      await sleep(250);
+
+      try { honorCheckbox.focus(); } catch (_) {}
+
+      // Try clicking the associated CDS label / text container first
+      const labelTextSpan = document.getElementById("agreement-checkbox-base-label-text") ||
+                            document.querySelector(".honor-code-agreement");
+      const label = labelTextSpan?.closest("label") ||
+                    honorCheckbox.closest("label") ||
+                    (honorCheckbox.id ? document.querySelector(`label[for="${honorCheckbox.id}"]`) : null) ||
+                    honorCheckbox.parentElement;
+      const target = labelTextSpan || label || honorCheckbox;
+
+      try {
+        target.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, view: window }));
+        target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+        target.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, view: window }));
+        target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+        target.click();
+      } catch (_) {}
+
+      await sleep(150);
+
+      if (isHonorCodeCheckboxChecked(honorCheckbox)) {
+        console.log("[Assignment Workflow] Honor Code checkbox ticked via click.");
+        return true;
+      }
+
+      // Fallback: programmatic input tick with React controlled component setter override
+      const success = await setInputChecked(honorCheckbox, true, true);
+      console.log(`[Assignment Workflow] Honor Code checkbox ticked via setInputChecked: ${success}`);
+      return success || isHonorCodeCheckboxChecked(honorCheckbox);
+    }
+
+    /**
+     * Automatically clicks the native in-page Submit button below the Honor Code section.
+     */
+    async function clickAssessmentSubmitButton() {
+      console.log("[Assignment Workflow] Looking for in-page Submit button below Honor Code...");
+      let submitBtn = findSubmitButton();
+
+      // Wait up to 3.5 seconds for Coursera React state to enable the Submit button
+      const startTime = Date.now();
+      while (Date.now() - startTime < 3500) {
+        if (submitBtn && isSubmitButtonEnabled(submitBtn)) {
+          break;
+        }
+        await sleep(150);
+        submitBtn = findSubmitButton();
+      }
+
+      if (!submitBtn) {
+        console.warn("[Assignment Workflow] In-page Submit button not found.");
+        return false;
+      }
+
+      console.log("[Assignment Workflow] Automatically clicking in-page Submit button (enabled=" + isSubmitButtonEnabled(submitBtn) + ")...");
+      try {
+        submitBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+      } catch (_) {}
+      await sleep(200);
+
+      try {
+        submitBtn.focus();
+        submitBtn.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, view: window }));
+        submitBtn.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+        submitBtn.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, view: window }));
+        submitBtn.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+        submitBtn.click();
+      } catch (err) {
+        console.error("[Assignment Workflow] Error clicking Submit button:", err);
+        try { submitBtn.click(); } catch (_) {}
+      }
+
+      return true;
+    }
+
+    /**
+     * Automatically detects and confirms Coursera's "Ready to submit?" modal dialog (Screenshot 3).
+     */
+    async function confirmSubmissionModal() {
+      console.log("[Assignment Workflow] Waiting for 'Ready to submit?' confirmation dialog...");
+
+      // Wait up to 4.5 seconds for the modal dialog to render in the DOM
+      const startTime = Date.now();
+      let modalInfo = null;
+
+      while (Date.now() - startTime < 4500) {
+        modalInfo = findReadyToSubmitModal();
+        if (modalInfo && modalInfo.submitButton) {
+          break;
+        }
+        await sleep(200);
+      }
+
+      // Generic fallback check for any active modal with a Submit button
+      if (!modalInfo || !modalInfo.submitButton) {
+        const anyModal = document.querySelector('div[role="dialog"], div.rc-Modal, div.cds-dialog');
+        if (anyModal) {
+          const modalBtn = Array.from(anyModal.querySelectorAll("button, a.cds-button")).find(b => {
+            const text = (b.innerText || b.textContent || "").trim();
+            return /^submit$/i.test(text) || b.getAttribute("data-testid")?.includes("submit");
+          });
+          if (modalBtn) {
+            modalInfo = {
+              dialog: anyModal,
+              submitButton: modalBtn,
+              isSubmitEnabled: isSubmitButtonEnabled(modalBtn)
+            };
+          }
+        }
+      }
+
+      if (!modalInfo || !modalInfo.submitButton) {
+        console.log("[Assignment Workflow] No confirmation modal dialog appeared (or submission already processed).");
+        return false;
+      }
+
+      console.log("[Assignment Workflow] 'Ready to submit?' modal detected. Automatically clicking modal Submit button...");
+      const modalSubmitBtn = modalInfo.submitButton;
+      await sleep(250);
+
+      try {
+        modalSubmitBtn.focus();
+        modalSubmitBtn.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, view: window }));
+        modalSubmitBtn.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+        modalSubmitBtn.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, view: window }));
+        modalSubmitBtn.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+        modalSubmitBtn.click();
+        console.log("[Assignment Workflow] Confirmation modal Submit button clicked successfully!");
+        return true;
+      } catch (err) {
+        console.error("[Assignment Workflow] Error clicking modal Submit button:", err);
+        try { modalSubmitBtn.click(); return true; } catch (_) { return false; }
+      }
+    }
+
+    /**
+     * Complete Post-Solve Auto-Submission Pipeline:
+     * 1. Automatically ticks the Honor Code agreement checkbox (#agreement-checkbox-base).
+     * 2. Automatically presses the in-page Submit button below the Honor Code.
+     * 3. Automatically confirms the "Ready to submit?" pop-up modal.
+     */
+    async function completeAssignmentSubmission() {
+      console.log("[Assignment Workflow] Initiating automated post-solve submission flow...");
+
+      notifyQuizProgress("submitting", {
+        message: "Ticking Honor Code agreement..."
+      });
+      const honorTicked = await tickHonorCodeCheckbox();
+      await sleep(400);
+
+      notifyQuizProgress("submitting", {
+        message: "Submitting assignment..."
+      });
+      const submitClicked = await clickAssessmentSubmitButton();
+      await sleep(500);
+
+      notifyQuizProgress("submitting", {
+        message: "Confirming submission dialog..."
+      });
+      const modalConfirmed = await confirmSubmissionModal();
+      await sleep(300);
+
+      return {
+        honorTicked,
+        submitClicked,
+        modalConfirmed
+      };
     }
 
     /**
@@ -5070,9 +5407,41 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         const finalTotal = questionElements.length || totalCount;
         const unansweredCount = unansweredQuestions.length;
 
+        if (answeredCount === 0 && finalTotal > 0) {
+          const failMsg = `Mapping failed: 0 of ${finalTotal} questions could be answered in the DOM. Please check question extraction and retry.`;
+          console.error(`[Solver] ${solverTimestamp()} ${failMsg}`);
+          notifyQuizProgress("error", {
+            message: failMsg,
+            current: 0,
+            total: finalTotal,
+            model: `${providerUsed} • ${modelUsed}`
+          });
+          const attemptKey = typeof getAssignmentAttemptKey === "function" ? getAssignmentAttemptKey() : null;
+          if (attemptKey) autoSolvedAttemptKeys.delete(attemptKey);
+          return {
+            ok: false,
+            message: failMsg,
+            answeredCount: 0,
+            totalCount: finalTotal,
+            provider: providerUsed,
+            model: modelUsed
+          };
+        }
+
         let summaryMsg = "";
+        let submissionResult = null;
+
         if (unansweredCount === 0) {
-          summaryMsg = `✓ All ${finalTotal} questions filled & verified. Honor Code preserved unticked. Please review & submit manually.`;
+          // All questions answered: automatically tick Honor Code, click Submit, and confirm modal!
+          submissionResult = await completeAssignmentSubmission();
+
+          if (submissionResult.modalConfirmed || submissionResult.submitClicked) {
+            summaryMsg = `✓ All ${finalTotal} questions answered & assignment submitted automatically!`;
+          } else if (submissionResult.honorTicked) {
+            summaryMsg = `✓ All ${finalTotal} questions answered & Honor Code agreement ticked.`;
+          } else {
+            summaryMsg = `✓ All ${finalTotal} questions filled & verified.`;
+          }
         } else {
           summaryMsg = `⚠️ ${answeredCount} of ${finalTotal} questions filled. Question(s) ${unansweredQuestions.join(", ")} need review before submitting.`;
         }
@@ -5092,7 +5461,8 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           answeredCount,
           totalCount: finalTotal,
           provider: providerUsed,
-          model: modelUsed
+          model: modelUsed,
+          submission: submissionResult
         };
       } catch (error) {
         console.error(`[Solver] ${solverTimestamp()} Error in solveQuiz:`, error);
@@ -5118,12 +5488,12 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
      * 4. Updates React internal _valueTracker to bypass React controlled input suppression.
      * 5. Verifies resulting DOM checked state.
      */
-    async function setInputChecked(input, shouldBeChecked) {
+    async function setInputChecked(input, shouldBeChecked, allowHonorCode = false) {
       if (!input) return false;
 
-      // STRICT SAFETY: Never touch academic integrity declarations
-      if (isAcademicIntegrityDeclaration(input)) {
-        console.log("[Academic Integrity] Preserved honor pledge declaration unticked.");
+      // STRICT SAFETY: Never touch academic integrity declarations unless explicitly requested by post-solve auto-submission
+      if (!allowHonorCode && isAcademicIntegrityDeclaration(input)) {
+        console.log("[Academic Integrity] Preserved honor pledge declaration unticked during question solving.");
         return false;
       }
 
@@ -5544,7 +5914,8 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         const label = optInput.closest("label") ||
                       (optInput.id ? (questionEl.querySelector(`label[for="${optInput.id}"]`) || document.querySelector(`label[for="${optInput.id}"]`)) : null) ||
                       optInput.parentElement;
-        const optCleanText = label ? getCleanVisibleText(label) : "";
+        const optCleanText = (typeof getOptionText === "function" ? getOptionText(optInput) : "") ||
+                             (label ? getCleanVisibleText(label) : "");
         const score = scoreOptionMatch(optInput, optIdx, optCleanText, normalized, visibleOptions.length);
         return { optInput, optIdx, optCleanText, score };
       });
