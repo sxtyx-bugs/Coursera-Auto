@@ -718,24 +718,26 @@
   const activeTabUrls = {};
 
   chrome.tabs.onUpdated.addListener(async function (tabId, changeInfo, tab) {
-    if (tab.url && tab.status === "complete") {
-      if (activeTabUrls[tabId] === tab.url) {
-        return;
-      }
+    const currentUrl = changeInfo.url || tab.url;
+    if (!currentUrl) return;
 
-      activeTabUrls[tabId] = tab.url;
+    const urlChanged = activeTabUrls[tabId] !== currentUrl;
+    if (urlChanged || changeInfo.status === "complete") {
+      activeTabUrls[tabId] = currentUrl;
+      console.log("[Coursera Extension] Tab navigation updated:", currentUrl);
+
       chrome.tabs.sendMessage(tabId, {
         message: "urlChanged",
-        url: tab.url
+        url: currentUrl
       }, function () {
         // Consume lastError to prevent uncaught error when content script is not yet injected
         chrome.runtime.lastError;
       });
 
-      // Auto-Quiz navigation event: if on coursera.org/learn and on an attempt or assessment page
-      if (tab.url.startsWith("https://www.coursera.org/learn")) {
+      // Auto-Quiz navigation event: if on coursera.org and on an attempt or assessment page
+      if (currentUrl.includes("coursera.org")) {
         try {
-          const urlpath = new URL(tab.url).pathname.toLowerCase();
+          const urlpath = new URL(currentUrl).pathname.toLowerCase();
           if (
             urlpath.endsWith("/attempt") ||
             urlpath.includes("/exam/") ||

@@ -10,11 +10,24 @@
   'use strict';
 
   (function () {
-    const ACTIVE_GUARD_KEY = "__coursera_ext_active__";
+    const extensionVersion = chrome.runtime.getManifest()?.version || "1.0.0";
+    console.log("[Coursera Extension] Content script injected. Version:", extensionVersion);
+    console.log("[Coursera Extension] Coursera page detected:", window.location.href);
+
+    const ACTIVE_GUARD_KEY = "__coursera_ext_instance__";
     if (window[ACTIVE_GUARD_KEY]) {
-      return;
+      try {
+        if (window[ACTIVE_GUARD_KEY].isAlive && window[ACTIVE_GUARD_KEY].isAlive()) {
+          console.log("[Coursera Extension] Active instance already running with valid context.");
+          return;
+        }
+      } catch (_) {}
+      try {
+        if (window[ACTIVE_GUARD_KEY].cleanup) {
+          window[ACTIVE_GUARD_KEY].cleanup();
+        }
+      } catch (_) {}
     }
-    window[ACTIVE_GUARD_KEY] = true;
 
     // In-memory state variables
     let currentUserId = null;
@@ -24,7 +37,24 @@
     let toastManager = null;
     let isVideoCompletionActive = false;
     let videoCountdownTimerId = null;
-    const extensionVersion = chrome.runtime.getManifest()?.version || "1.0.0";
+    let pageObserver = null;
+
+    window[ACTIVE_GUARD_KEY] = {
+      version: extensionVersion,
+      isAlive: () => {
+        try {
+          return Boolean(chrome?.runtime?.id);
+        } catch (_) {
+          return false;
+        }
+      },
+      cleanup: () => {
+        try {
+          if (pageObserver) pageObserver.disconnect();
+          if (videoCountdownTimerId) clearInterval(videoCountdownTimerId);
+        } catch (_) {}
+      }
+    };
 
     /**
      * Checks if a video completion reload occurred and displays confirmation toast
@@ -2574,9 +2604,6 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       return true;
     }
 
-      return true;
-    }
-
     /**
      * Extracts visible text from an element while stripping invisible honeypots,
      * scripts, styles, and prompt injection canaries.
@@ -3162,6 +3189,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
      * Deduplicates across discovery sweeps using stable question fingerprints.
      */
     async function extractAllQuestionsFromDOM(options = {}) {
+      console.log("[Coursera Extension] Question extraction initialized.");
       const enableScroll = options.enableScrollDiscovery !== false;
       const discoveredQuestionsMap = new Map(); // fingerprint -> question object
       let duplicatesRemoved = 0;
@@ -3276,6 +3304,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
      * Synchronous / instant extraction fallback for callers that do not require progressive scrolling.
      */
     function extractQuestionsFromDOM() {
+      console.log("[Coursera Extension] Question extraction initialized.");
       try {
         const questionElements = findVisibleQuestionElements();
         if (!questionElements || questionElements.length === 0) return null;
@@ -3773,6 +3802,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       }
 
       const currentPath = window.location.pathname;
+      console.log("[Coursera Extension] Assignment page detected:", currentPath);
 
       // 1. If questions are already active and loaded in DOM
       if (hasLoadedAssignmentQuestions()) {
@@ -4728,6 +4758,22 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const actionName = typeof request === "string" ? request : request?.action;
 
+      // Handshake ping from popup
+      if (actionName === "PING" || actionName === "HANDSHAKE") {
+        console.log("[Coursera Extension] Popup handshake received.");
+        const isAssignment = typeof isEligibleAssignmentPage === "function" && isEligibleAssignmentPage();
+        sendResponse({
+          ok: true,
+          pong: true,
+          version: extensionVersion,
+          active: true,
+          url: window.location.href,
+          isAssignment: isAssignment,
+          hasQuestions: document.querySelectorAll('[data-testid*="question" i], div.rc-FormPartsQuestion, fieldset').length > 0
+        });
+        return true;
+      }
+
       // Direct bypass
       if (actionName === "bypass") {
         (async () => {
@@ -4808,7 +4854,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     // SPA Lifecycle & MutationObserver Initialization
     // -------------------------------------------------------------
     if (typeof MutationObserver !== "undefined") {
-      const pageObserver = new MutationObserver(() => {
+      pageObserver = new MutationObserver(() => {
         if (typeof debouncedAssignmentCheck === "function") {
           debouncedAssignmentCheck();
         }
@@ -4817,12 +4863,52 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         pageObserver.observe(document.body, { childList: true, subtree: true });
       } else {
         document.addEventListener("DOMContentLoaded", () => {
-          if (document.body) {
+          if (document.body && pageObserver) {
             pageObserver.observe(document.body, { childList: true, subtree: true });
           }
         });
       }
     }
+
+    // In-page SPA History Navigation Hook
+    function hookHistoryNavigation() {
+      try {
+        const origPushState = history.pushState;
+        if (origPushState && !history._pushStateHooked) {
+          history.pushState = function (...args) {
+            const ret = origPushState.apply(this, args);
+            try {
+              window.dispatchEvent(new Event("locationchange"));
+            } catch (_) {}
+            return ret;
+          };
+          history._pushStateHooked = true;
+        }
+
+        const origReplaceState = history.replaceState;
+        if (origReplaceState && !history._replaceStateHooked) {
+          history.replaceState = function (...args) {
+            const ret = origReplaceState.apply(this, args);
+            try {
+              window.dispatchEvent(new Event("locationchange"));
+            } catch (_) {}
+            return ret;
+          };
+          history._replaceStateHooked = true;
+        }
+
+        window.addEventListener("locationchange", () => {
+          console.log("[Coursera Extension] In-page SPA navigation detected:", window.location.href);
+          cachedCourseMaterials = null;
+          checkAndCompleteCurrentWidget().catch(() => {});
+          if (typeof debouncedAssignmentCheck === "function") {
+            debouncedAssignmentCheck();
+          }
+        });
+      } catch (_) {}
+    }
+
+    hookHistoryNavigation();
 
     if (typeof window !== "undefined") {
       window.addEventListener("popstate", () => {
@@ -4841,5 +4927,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     if (typeof debouncedAssignmentCheck === "function") {
       debouncedAssignmentCheck();
     }
+
+    console.log("[Coursera Extension] Initialization completed successfully.");
   })();
 })();

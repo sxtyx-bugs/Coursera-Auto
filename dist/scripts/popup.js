@@ -74,19 +74,17 @@
       chrome.tabs.sendMessage(tabId, { action: action }, (response) => {
         const err = chrome.runtime.lastError;
         if (err) {
-          console.warn("[CourseraAssistant] Connection pending, injecting content script:", err.message);
+          console.warn("[Coursera Extension] Connection pending, injecting content script:", err.message);
           // If receiving end is missing (e.g. extension updated/reloaded), inject content script
           if (chrome.scripting) {
             chrome.scripting.executeScript({
               target: { tabId: tabId },
               files: ["dist/scripts/content.js"]
             }, () => {
-              if (chrome.runtime.lastError) {
-                // Try plain string send fallback
-                chrome.tabs.sendMessage(tabId, action, (resp2) => {
-                  const err2 = chrome.runtime.lastError;
-                  if (callback) callback(err2 ? "Please reload the Coursera course page." : null, resp2);
-                });
+              const injectErr = chrome.runtime.lastError;
+              if (injectErr) {
+                console.error("[Coursera Extension] Content script injection failed:", injectErr.message);
+                if (callback) callback("Could not attach to Coursera tab. Check tab permissions.");
                 return;
               }
               // Wait briefly for content script to mount message listeners
@@ -94,15 +92,14 @@
                 chrome.tabs.sendMessage(tabId, { action: action }, (retryResp) => {
                   const retryErr = chrome.runtime.lastError;
                   if (retryErr) {
-                    chrome.tabs.sendMessage(tabId, action, (finalResp) => {
-                      const finalErr = chrome.runtime.lastError;
-                      if (callback) callback(finalErr ? "Please reload the Coursera course page." : null, finalResp);
-                    });
+                    console.error("[Coursera Extension] Message retry failed:", retryErr.message);
+                    if (callback) callback("Connection to Coursera failed. Try refreshing the tab.");
                   } else {
+                    console.log("[Coursera Extension] Message sent and response received:", action);
                     if (callback) callback(null, retryResp);
                   }
                 });
-              }, 300);
+              }, 250);
             });
             return;
           }
@@ -111,7 +108,115 @@
           return;
         }
 
+        console.log("[Coursera Extension] Message sent and response received:", action);
         if (callback) callback(null, response);
+      });
+    });
+  }
+
+  /**
+   * Performs an initialization handshake with the active Coursera tab on popup startup.
+   * Accurately distinguishes between:
+   * - Unsupported page (non-Coursera)
+   * - Content script not injected
+   * - Content script initializing
+   * - Runtime communication failure
+   */
+  function initConnectionHandshake() {
+    const statusEl = document.getElementById("key-status");
+
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (!tabs || !tabs[0] || !tabs[0].id) {
+        if (statusEl) {
+          statusEl.textContent = "No active tab detected.";
+          statusEl.style.color = "#94a3b8";
+        }
+        return;
+      }
+
+      const activeTab = tabs[0];
+      const tabId = activeTab.id;
+      const url = activeTab.url || "";
+
+      // 1. Unsupported page
+      if (!url.includes("coursera.org")) {
+        console.log("[Coursera Extension] Non-Coursera page detected:", url);
+        if (statusEl) {
+          statusEl.textContent = "Open a Coursera course or assignment to activate.";
+          statusEl.style.color = "#64748b";
+        }
+        return;
+      }
+
+      console.log("[Coursera Extension] Coursera page detected in active tab. Initiating handshake...");
+
+      // 2. Check if content script is responding to PING
+      chrome.tabs.sendMessage(tabId, { action: "PING" }, (res) => {
+        const pingErr = chrome.runtime.lastError;
+        if (!pingErr && res && res.ok) {
+          console.log(`[Coursera Extension] Popup handshake received. Content script v${res.version || '1.0'} active.`);
+          if (statusEl && !statusEl.textContent.includes("saved")) {
+            if (res.isAssignment) {
+              statusEl.textContent = "✓ Connected • Assignment active";
+              statusEl.style.color = "#10b981";
+            } else {
+              statusEl.textContent = "✓ Connected to Coursera";
+              statusEl.style.color = "#10b981";
+            }
+          }
+          return;
+        }
+
+        // 3. Content script not responding — attempt recovery via scripting.executeScript
+        console.warn("[Coursera Extension] Content script not responding. Attempting dynamic recovery injection...");
+        if (statusEl && !statusEl.textContent.includes("saved")) {
+          statusEl.textContent = "Connecting to Coursera page...";
+          statusEl.style.color = "#0284c7";
+        }
+
+        if (chrome.scripting) {
+          chrome.scripting.executeScript({
+            target: { tabId: tabId },
+            files: ["dist/scripts/content.js"]
+          }, () => {
+            const injectErr = chrome.runtime.lastError;
+            if (injectErr) {
+              console.error("[Coursera Extension] Script injection failed:", injectErr.message);
+              if (statusEl && !statusEl.textContent.includes("saved")) {
+                statusEl.textContent = "Could not attach to Coursera. Please check page permissions.";
+                statusEl.style.color = "#ef4444";
+              }
+              return;
+            }
+
+            // Allow content script to mount
+            setTimeout(() => {
+              chrome.tabs.sendMessage(tabId, { action: "PING" }, (retryRes) => {
+                const retryPingErr = chrome.runtime.lastError;
+                if (!retryPingErr && retryRes && retryRes.ok) {
+                  console.log("[Coursera Extension] Handshake recovered successfully!");
+                  if (statusEl && !statusEl.textContent.includes("saved")) {
+                    statusEl.textContent = "✓ Connected to Coursera";
+                    statusEl.style.color = "#10b981";
+                  }
+                  // Reload user profile now that connection is established
+                  loadUserProfile();
+                } else {
+                  console.warn("[Coursera Extension] Content script initializing or page still loading.");
+                  if (statusEl && !statusEl.textContent.includes("saved")) {
+                    statusEl.textContent = "Coursera page is still loading. Please wait...";
+                    statusEl.style.color = "#f59e0b";
+                  }
+                }
+              });
+            }, 250);
+          });
+        } else {
+          if (statusEl && !statusEl.textContent.includes("saved")) {
+            statusEl.textContent = "Communication error. Scripting permission unavailable.";
+            statusEl.style.color = "#ef4444";
+          }
+        }
       });
     });
   }
@@ -607,6 +712,7 @@
     initAiSettings();
     loadUserProfile();
     initSettingsButton();
+    initConnectionHandshake();
   }
 
   // Ensure DOM is ready before executing initialization
