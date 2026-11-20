@@ -734,17 +734,20 @@
         chrome.runtime.lastError;
       });
 
-      // Auto-Quiz navigation event: if on coursera.org and on an attempt or assessment page
+      // Auto-Quiz navigation event: if on coursera.org and on an active attempt
       if (currentUrl.includes("coursera.org")) {
         try {
-          const urlpath = new URL(currentUrl).pathname.toLowerCase();
-          if (
+          const urlObj = new URL(currentUrl);
+          const urlpath = urlObj.pathname.toLowerCase();
+          const isFeedback = urlpath.includes("/view-feedback") || urlpath.includes("/feedback") || urlpath.includes("/review");
+          const isSupplement = urlpath.includes("/supplement/") || urlpath.includes("/reading/") || urlpath.includes("/lecture/") || urlpath.includes("/discussions/");
+          const isAttempt = !isFeedback && !isSupplement && (
             urlpath.endsWith("/attempt") ||
-            urlpath.includes("/exam/") ||
-            urlpath.includes("/quiz/") ||
-            urlpath.includes("/assignment-submission/") ||
-            urlpath.includes("/assignment/")
-          ) {
+            urlpath.includes("/attempt/") ||
+            (urlpath.includes("/assignment-submission/") && urlpath.includes("/attempt"))
+          );
+
+          if (isAttempt) {
             chrome.tabs.sendMessage(
               tabId,
               { action: "attempt" },

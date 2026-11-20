@@ -209,7 +209,7 @@ const mockDocument = {
 const contentCode = fs.readFileSync("content.js", "utf8");
 
 // Slice the functions
-const startFuncStart = contentCode.indexOf("const EXACT_START_SPAN_SELECTOR =");
+const startFuncStart = contentCode.indexOf("function classifyCourseraRoute");
 const startFuncEnd = contentCode.indexOf("let launchedAssignmentPaths = new Set();", startFuncStart);
 const workflowCoreCode = contentCode.slice(startFuncStart, startFuncEnd);
 

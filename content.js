@@ -2292,14 +2292,48 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         return res;
       }
 
+      sanitizeCache() {
+        if (!this.cache) return;
+        for (const [k] of this.cache.entries()) {
+          if (
+            typeof k !== "string" ||
+            k.includes("character") ||
+            k.includes("out of") ||
+            k.includes("used") ||
+            !k.includes(":::")
+          ) {
+            this.cache.delete(k);
+          }
+        }
+      }
+
       getCacheKey(questions) {
         try {
-          if (!Array.isArray(questions)) return null;
+          if (!Array.isArray(questions) || questions.length === 0) return null;
+          // Central validation gate before cache key generation
+          for (const q of questions) {
+            const val = typeof validateQuestionCandidate === "function"
+              ? validateQuestionCandidate(q)
+              : { isValid: Boolean(q && q.question && q.question.trim().length > 4) };
+            if (!val.isValid) {
+              console.warn(`[Cache] Skipped: invalid question set - ${val.reason}`);
+              return null;
+            }
+          }
+
           return questions.map(q => {
-            const prompt = (q.question || "").trim().toLowerCase();
-            const opts = (q.options || []).map(o => String(o).trim().toLowerCase()).sort().join("|");
-            return `${prompt}::${opts}`;
-          }).join("###");
+            const type = q.type || (q.isMultipleSelect ? "multiple-select" : "mcq");
+            const prompt = (typeof normalizeMathText === "function" ? normalizeMathText(q.question || "") : (q.question || ""))
+              .toLowerCase()
+              .replace(/\s+/g, " ")
+              .trim();
+            // Preserve exact option text and ordering (never sort!):
+            const opts = (q.options || []).map(o => {
+              const optStr = typeof normalizeMathText === "function" ? normalizeMathText(String(o)) : String(o);
+              return optStr.toLowerCase().replace(/\s+/g, " ").trim();
+            }).join("|||");
+            return `${type}:::${prompt}:::${opts}`;
+          }).join("#####");
         } catch (_) {
           return null;
         }
@@ -2321,19 +2355,31 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       }
 
       async _executeSolve(questions, onProgress) {
+        this.sanitizeCache();
         const cacheKey = this.getCacheKey(questions);
         if (cacheKey && this.cache.has(cacheKey)) {
-          console.log("[AI Fallback] Exact matching question set found in cache. Serving from cache.");
           const cached = this.cache.get(cacheKey);
-          if (typeof onProgress === "function") {
-            onProgress({
-              providerName: cached.providerName,
-              model: cached.model,
-              message: `Served from cache (${cached.providerName})`,
-              isCached: true
-            });
+          const isValidCached =
+            cached &&
+            Array.isArray(cached.answers) &&
+            cached.answers.length === questions.length &&
+            cached.answers.every((a, idx) => a && (a.selectedOptionIndexes || a.selectedOptionText || a.content || questions[idx].type === "text"));
+
+          if (isValidCached) {
+            console.log("[AI Fallback] Exact matching question set found in cache. Serving from cache.");
+            if (typeof onProgress === "function") {
+              onProgress({
+                providerName: cached.providerName,
+                model: cached.model,
+                message: `Served from cache (${cached.providerName})`,
+                isCached: true
+              });
+            }
+            return { ...cached, isCached: true };
+          } else {
+            console.warn("[Cache] Purging stale or malformed cached entry.");
+            this.cache.delete(cacheKey);
           }
-          return { ...cached, isCached: true };
         }
 
         // Determine ordered provider IDs
@@ -2833,32 +2879,185 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     }
 
     /**
+     * Determines if a text snippet represents UI metadata, control-generated text,
+     * character counters, word counters, action button labels, or placeholders in context.
+     * Never classifies these as questions.
+     */
+    function isControlGeneratedOrUIMetadata(text) {
+      if (!text || typeof text !== "string") return true;
+      const trimmed = text.trim();
+      if (trimmed.length === 0) return true;
+
+      // 1. Character counters & word counters
+      // Examples: "0 out of 110 characters used", "250/500 characters remaining", "0 / 100", "0 of 500 words"
+      if (
+        /\b\d+\s*(?:out\s+of|\/)\s*\d+\s*(?:characters?|words?|chars?)\s*(?:used|left|remaining)?\b/i.test(trimmed) ||
+        /\b(?:characters?|words?|chars?)\s*(?:remaining|used|left|count|counter)\b/i.test(trimmed) ||
+        /\b(?:min|max|minimum|maximum|limit)\s*:\s*\d+\s*(?:characters?|words?)\b/i.test(trimmed) ||
+        /\b\d+\s*(?:characters?|words?)\s*(?:max|maximum|limit)\b/i.test(trimmed) ||
+        /\bmax(?:imum)?\s*\d+\s*(?:characters?|words?)\b/i.test(trimmed) ||
+        /^\s*\d+\s*\/\s*\d+\s*$/i.test(trimmed) ||
+        /^\s*\d+\s*(?:characters?|words?|chars?)\s*$/i.test(trimmed)
+      ) {
+        return true;
+      }
+
+      // 2. Buttons, action labels, form navigation controls
+      if (
+        /^(?:save(?:\s+draft)?|submit(?:\s+assignment)?|continue|next|back|previous|start\s+assignment|help\s+me\s+practice|cancel|review|reset|clear\s+selection|try\s+again|retake(?:\s+quiz)?|retake|report\s+an\s+issue|share\s+feedback|close|open|menu|dismiss|done|ok)$/i.test(trimmed)
+      ) {
+        return true;
+      }
+
+      // 3. Text input / textarea placeholders and placeholder-only text
+      if (
+        /^(?:type|enter|write|input|add)\s+(?:your\s+)?(?:response|answer|text|comment|code)?(?:\s+here)?[\s\.]*$/i.test(trimmed) ||
+        /^(?:placeholder|your\s+answer|enter\s+text[\s\.]*)$/i.test(trimmed)
+      ) {
+        return true;
+      }
+
+      // 4. Form instructions / point badges / metadata without question prompt
+      if (
+        /^(?:\d+\s*points?|points?\s*possible|required|optional|select\s+all\s+that\s+apply|please\s+answer\s+this\s+question|multiple\s+choice|single\s+select|unanswered)[\s\.]*$/i.test(trimmed)
+      ) {
+        return true;
+      }
+
+      // 5. Feedback, survey, ratings, and discussion prompts
+      if (
+        /^(?:was\s+this\s+(?:reading|video|article|page|material)\s+helpful\??|did\s+you\s+find\s+this\s+helpful\??|rate\s+this\s+course|leave\s+a?\s*(?:comment|feedback)|discussion\s+forum|share\s+your\s+thoughts)[\s\.]*$/i.test(trimmed)
+      ) {
+        return true;
+      }
+
+      // 6. Loading indicators, skeletons, accessibility/hidden text
+      if (
+        /^(?:loading(?:\.\.\.)?|skeleton|skip\s+to\s+main\s+content|navigation\s+landmark|banner|main)$/i.test(trimmed)
+      ) {
+        return true;
+      }
+
+      return false;
+    }
+
+    /**
+     * Authoritative Central Semantic Question Validation Function.
+     * Enforces strict validation across ALL extraction strategies, cache lookup, and solver entry points.
+     * Pipeline: Extract -> Normalize -> Validate -> Deduplicate -> Cache Lookup -> AI Request -> Map Answer
+     */
+    function validateQuestionCandidate(candidate) {
+      if (!candidate) {
+        return {
+          isValid: false,
+          reason: "candidate is null or undefined",
+          candidate: null
+        };
+      }
+
+      const prompt = (candidate.question || candidate.prompt || "").trim();
+      const type = candidate.type || (candidate.isMultipleSelect ? "multiple-select" : "mcq");
+
+      // Prompt validation
+      if (!prompt || prompt.length < 5) {
+        const reason = "missing or too short question prompt text";
+        console.log(`[Validation] Rejected: ${reason} ("${prompt}")`);
+        candidate.validationStatus = "rejected";
+        candidate.rejectionReason = reason;
+        return { isValid: false, reason, candidate };
+      }
+
+      if (isControlGeneratedOrUIMetadata(prompt)) {
+        const reason = /\bcharacters?|words?\b/i.test(prompt)
+          ? "character counter"
+          : (/save|submit|continue|next|start/i.test(prompt)
+            ? "navigation or action label"
+            : "control-generated UI metadata or placeholder");
+        console.log(`[Validation] Rejected: ${reason} ("${prompt.slice(0, 60)}")`);
+        candidate.validationStatus = "rejected";
+        candidate.rejectionReason = reason;
+        return { isValid: false, reason, candidate };
+      }
+
+      // Check if prompt is purely point value metadata without question content
+      const strippedPoints = prompt.replace(/^\s*\d+\s*points?\s*/i, "").trim();
+      if (strippedPoints.length < 5 || isControlGeneratedOrUIMetadata(strippedPoints)) {
+        const reason = "metadata-only prompt (points/instructions without question text)";
+        console.log(`[Validation] Rejected: ${reason} ("${prompt}")`);
+        candidate.validationStatus = "rejected";
+        candidate.rejectionReason = reason;
+        return { isValid: false, reason, candidate };
+      }
+
+      // Multiple choice questions (single-choice radio or multiple-select checkbox)
+      if (type === "mcq" || type === "multiple-select") {
+        const options = candidate.options || [];
+        // Filter out any options that are control-generated metadata or button labels
+        const validOptions = options.filter(opt => {
+          const optStr = String(opt || "").trim();
+          return optStr.length > 0 && !isControlGeneratedOrUIMetadata(optStr);
+        });
+
+        if (validOptions.length < 2) {
+          const reason = `insufficient valid answer options (${validOptions.length} valid options found, minimum 2 required)`;
+          console.log(`[Validation] Rejected: ${reason} ("${prompt.slice(0, 60)}")`);
+          candidate.validationStatus = "rejected";
+          candidate.rejectionReason = reason;
+          return { isValid: false, reason, candidate };
+        }
+
+        // Clean options and normalized options
+        candidate.options = validOptions;
+        if (typeof normalizeMathText === "function") {
+          candidate.normalizedOptions = validOptions.map(normalizeMathText);
+        }
+
+        const isMultipleSelect = type === "multiple-select" || Boolean(candidate.isMultipleSelect);
+        candidate.type = isMultipleSelect ? "multiple-select" : "mcq";
+        candidate.isMultipleSelect = isMultipleSelect;
+
+        candidate.validationStatus = "valid";
+        candidate.rejectionReason = null;
+        console.log(`[Validation] Accepted: ${candidate.type} question ("${prompt.slice(0, 50)}") with ${validOptions.length} options`);
+        return { isValid: true, reason: null, candidate };
+      } else if (type === "text") {
+        // Text-entry question: must be associated with a real textarea or text input
+        const hasTextInput = (candidate.textInputs && candidate.textInputs.length > 0) ||
+          (candidate.container && candidate.container.querySelector('textarea, input[type="text"]'));
+
+        if (!hasTextInput) {
+          const reason = "text-entry question missing associated input or textarea field";
+          console.log(`[Validation] Rejected: ${reason} ("${prompt.slice(0, 60)}")`);
+          candidate.validationStatus = "rejected";
+          candidate.rejectionReason = reason;
+          return { isValid: false, reason, candidate };
+        }
+
+        candidate.type = "text";
+        candidate.options = [];
+        candidate.normalizedOptions = [];
+        candidate.isMultipleSelect = false;
+        candidate.validationStatus = "valid";
+        candidate.rejectionReason = null;
+        console.log(`[Validation] Accepted: text-entry question ("${prompt.slice(0, 50)}")`);
+        return { isValid: true, reason: null, candidate };
+      } else {
+        const reason = `unknown question type "${type}"`;
+        console.log(`[Validation] Rejected: ${reason}`);
+        candidate.validationStatus = "rejected";
+        candidate.rejectionReason = reason;
+        return { isValid: false, reason, candidate };
+      }
+    }
+
+    /**
      * Validates completeness of an extracted question before passing to AI solver.
      */
     function validateQuestionCompleteness(q) {
-      if (!q) return { isComplete: false, issues: ["Question is null or undefined"] };
-      const issues = [];
-
-      if (!q.question || q.question.trim().length === 0) {
-        issues.push("Missing question prompt text");
-      }
-
-      if (q.type === "mcq" || q.type === "multiple-select") {
-        if (!q.options || q.options.length < 2) {
-          issues.push(`Insufficient options (found ${q.options ? q.options.length : 0}, expected >= 2)`);
-        }
-        if (q.visibleInputs && q.options && q.visibleInputs.length !== q.options.length) {
-          issues.push(`Input count (${q.visibleInputs.length}) mismatch with options count (${q.options.length})`);
-        }
-      } else if (q.type === "text") {
-        if (!q.textInputs || q.textInputs.length === 0) {
-          issues.push("Missing text input control");
-        }
-      }
-
+      const val = validateQuestionCandidate(q);
       return {
-        isComplete: issues.length === 0,
-        issues
+        isComplete: val.isValid,
+        issues: val.isValid ? [] : [val.reason]
       };
     }
 
@@ -2886,8 +3085,23 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
 
         // Container must have at least one choice control or text input
         const hasChoice = findQuestionOptionInputs(container).length > 0;
-        const hasText = Array.from(container.querySelectorAll('textarea, input[type="text"]')).some(isElementVisible);
+        const textInputs = Array.from(container.querySelectorAll('textarea, input[type="text"]')).filter(inp => {
+          if (!isElementVisible(inp)) return false;
+          if (inp.closest('.rc-Feedback, [data-testid*="feedback" i], [class*="feedback" i], form[class*="search" i], [role="search"], [data-testid*="comment" i]')) {
+            return false;
+          }
+          return true;
+        });
+        const hasText = textInputs.length > 0;
         if (!hasChoice && !hasText) return false;
+
+        // Semantic validation: If it only has text input, verify it has a genuine prompt and is not a character counter / placeholder
+        if (!hasChoice && hasText) {
+          const prompt = extractQuestionPrompt(container);
+          if (!prompt || isControlGeneratedOrUIMetadata(prompt)) {
+            return false;
+          }
+        }
 
         if (!discoveredContainers.has(container)) {
           discoveredContainers.add(container);
@@ -2967,6 +3181,9 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         document.querySelectorAll('input[type="radio"], input[type="checkbox"], [role="radio"], [role="checkbox"], textarea, input[type="text"]')
       ).filter(inp => {
         if (isAcademicIntegrityDeclaration(inp)) return false;
+        if (inp.closest('.rc-Feedback, [data-testid*="feedback" i], [class*="feedback" i], form[class*="search" i], [role="search"], [data-testid*="comment" i]')) {
+          return false;
+        }
         if (inp.tagName === "TEXTAREA" || inp.type === "text") return isElementVisible(inp);
         return isOptionInputVisible(inp);
       });
@@ -3132,8 +3349,11 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           if (processedInputs.has(inp)) return;
           const container = findCommonContainerForInputs([inp]);
           if (container && !questionContainers.includes(container)) {
-            questionContainers.push(container);
-            processedInputs.add(inp);
+            const prompt = extractQuestionPrompt(container);
+            if (prompt && !isControlGeneratedOrUIMetadata(prompt)) {
+              questionContainers.push(container);
+              processedInputs.add(inp);
+            }
           }
         });
 
@@ -3226,7 +3446,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
             const isInsideOption = Boolean(promptEl.closest('label, [role="radio"], [role="checkbox"], div[class*="option" i], div[class*="choice" i]'));
             if (!isInsideOption) {
               const text = getCleanVisibleText(promptEl);
-              if (text && text.trim().length > 3 && !isHoneypotQuestion(text)) {
+              if (text && text.trim().length > 3 && !isHoneypotQuestion(text) && !isControlGeneratedOrUIMetadata(text)) {
                 return sanitizeCourseraPromptInjection(text.trim());
               }
             }
@@ -3239,21 +3459,22 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       for (const h of headings) {
         if (!h.closest('label, [role="radio"], [role="checkbox"]')) {
           const text = getCleanVisibleText(h);
-          if (text && text.trim().length > 5 && !isHoneypotQuestion(text)) {
+          if (text && text.trim().length > 5 && !isHoneypotQuestion(text) && !isControlGeneratedOrUIMetadata(text)) {
             return sanitizeCourseraPromptInjection(text.trim());
           }
         }
       }
 
-      // 3. Structural fallback: Clone container and remove all answer option elements, buttons, badges
+      // 3. Structural fallback: Clone container and remove all answer option elements, buttons, badges, character counters
       try {
         const clone = qEl.cloneNode(true);
 
-        // Remove all option wrappers and inputs
+        // Remove all option wrappers, inputs, and character counters
         const optionRemovers = [
           'label',
           'input',
           'button',
+          'textarea',
           '[role="radio"]',
           '[role="checkbox"]',
           '.rc-Option',
@@ -3263,7 +3484,14 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           'div[class*="Checkbox" i]',
           'div[class*="Option" i]',
           '[class*="point" i]',
-          '[data-testid*="point" i]'
+          '[data-testid*="point" i]',
+          'div[class*="character" i]',
+          'div[class*="counter" i]',
+          'span[class*="character" i]',
+          'span[class*="counter" i]',
+          '[data-testid*="character" i]',
+          '[data-testid*="counter" i]',
+          '[aria-live="polite"]'
         ];
         clone.querySelectorAll(optionRemovers.join(", ")).forEach(el => el.remove());
 
@@ -3272,14 +3500,17 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         // Remove point badges like "1 point", "10 points"
         cleanText = cleanText.replace(/^\s*\d+\s*points?\s*/i, "").trim();
 
-        if (cleanText && cleanText.length > 3 && !isHoneypotQuestion(cleanText)) {
+        if (cleanText && cleanText.length > 3 && !isHoneypotQuestion(cleanText) && !isControlGeneratedOrUIMetadata(cleanText)) {
           return sanitizeCourseraPromptInjection(cleanText);
         }
       } catch (_) {}
 
       // 4. Last resort: raw text of container stripped of option texts
       const rawText = getCleanVisibleText(qEl);
-      return sanitizeCourseraPromptInjection(rawText.trim());
+      if (rawText && !isControlGeneratedOrUIMetadata(rawText)) {
+        return sanitizeCourseraPromptInjection(rawText.trim());
+      }
+      return "";
     }
 
     /**
@@ -3400,12 +3631,36 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
             return;
           }
 
+          console.log(`[Extraction] Candidate detected: type="${qType}", inputs=${visibleInputs.length}, prompt="${promptText.slice(0, 50)}"`);
+
           const visual = detectVisualElements(qEl);
           const qId = qEl.id || qEl.getAttribute("data-testid") || ("q_" + (discoveredQuestionsMap.size + 1));
           const normQuestion = normalizeMathText(promptText);
           const normOptions = optionTexts.map(normalizeMathText);
 
-          const fingerprint = generateQuestionFingerprint(promptText, optionTexts);
+          const candidate = {
+            index: discoveredQuestionsMap.size,
+            questionId: qId,
+            question: promptText,
+            normalizedQuestion: normQuestion,
+            options: optionTexts,
+            normalizedOptions: normOptions,
+            type: qType,
+            isMultipleSelect: hasCheckbox,
+            hasVisualElements: visual.hasVisual,
+            visualContext: visual.visualContext,
+            container: qEl,
+            visibleInputs: visibleInputs,
+            textInputs: textInputs,
+            detectionStrategy: qEl._detectionStrategy || strategyTag
+          };
+
+          const val = validateQuestionCandidate(candidate);
+          if (!val.isValid) {
+            return;
+          }
+
+          const fingerprint = generateQuestionFingerprint(promptText, candidate.options);
           if (discoveredQuestionsMap.has(fingerprint)) {
             duplicatesRemoved++;
             // Update container reference to the freshest DOM element
@@ -3413,22 +3668,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
             existing.container = qEl;
             existing.visibleInputs = visibleInputs;
           } else {
-            discoveredQuestionsMap.set(fingerprint, {
-              index: discoveredQuestionsMap.size,
-              questionId: qId,
-              question: promptText,
-              normalizedQuestion: normQuestion,
-              options: optionTexts,
-              normalizedOptions: normOptions,
-              type: qType,
-              isMultipleSelect: hasCheckbox,
-              hasVisualElements: visual.hasVisual,
-              visualContext: visual.visualContext,
-              container: qEl,
-              visibleInputs: visibleInputs,
-              textInputs: textInputs,
-              detectionStrategy: qEl._detectionStrategy || strategyTag
-            });
+            discoveredQuestionsMap.set(fingerprint, candidate);
           }
         });
 
@@ -3527,7 +3767,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           const normQuestion = normalizeMathText(promptText);
           const normOptions = options.map(normalizeMathText);
 
-          extracted.push({
+          const candidate = {
             index: idx,
             questionId: qId,
             question: promptText,
@@ -3539,8 +3779,14 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
             hasVisualElements: visual.hasVisual,
             visualContext: visual.visualContext,
             container: qEl,
-            visibleInputs: visibleInputs
-          });
+            visibleInputs: visibleInputs,
+            textInputs: textInputs
+          };
+
+          const val = validateQuestionCandidate(candidate);
+          if (!val.isValid) return;
+
+          extracted.push(candidate);
         });
 
         return extracted.length > 0 ? extracted : null;
@@ -3596,6 +3842,149 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
      * Excludes normal lectures, reading materials, discussions, and coach widgets.
      */
     /**
+     * Authoritative Central Route Classifier for Coursera.
+     * Separately classifies:
+     * - "active-attempt" (Active assignment attempt)
+     * - "landing" (Assignment landing page)
+     * - "feedback" (Assignment feedback / review page)
+     * - "supplement" (Supplementary reading / lecture / video / discussion page)
+     * - "other" (Other Coursera pages)
+     *
+     * Only "active-attempt" may initiate question extraction and solving.
+     */
+    function classifyCourseraRoute(targetUrl) {
+      let pathname = "";
+      let href = "";
+      try {
+        if (targetUrl) {
+          const u = new URL(targetUrl, (typeof window !== "undefined" && window.location?.origin) || "https://www.coursera.org");
+          pathname = (u.pathname || "").toLowerCase();
+          href = (u.href || "").toLowerCase();
+        } else if (typeof window !== "undefined" && window.location) {
+          pathname = (window.location.pathname || "").toLowerCase();
+          href = (window.location.href || "").toLowerCase();
+        }
+      } catch (_) {
+        pathname = String(targetUrl || "").toLowerCase();
+        href = pathname;
+      }
+
+      // 1. Assignment Feedback / Review routes (Strictly excluded from solving)
+      const isFeedback =
+        pathname.includes("/view-feedback") ||
+        pathname.includes("/feedback") ||
+        pathname.includes("/review/") ||
+        pathname.endsWith("/review") ||
+        pathname.includes("/scores") ||
+        pathname.includes("/submission-details") ||
+        href.includes("view-feedback") ||
+        href.includes("/review/");
+
+      if (isFeedback) {
+        return {
+          type: "feedback",
+          isAttempt: false,
+          isLanding: false,
+          isFeedback: true,
+          isSupplement: false,
+          isOther: false,
+          pathname
+        };
+      }
+
+      // 2. Supplementary / Reading / Lecture / Discussion / Coach routes
+      const isSupplement =
+        pathname.includes("/supplement/") ||
+        pathname.endsWith("/supplement") ||
+        pathname.includes("/reading/") ||
+        pathname.endsWith("/reading") ||
+        pathname.includes("/lecture/") ||
+        pathname.includes("/discussions/") ||
+        pathname.includes("/coach/") ||
+        pathname.includes("/ungradedwidget/") ||
+        pathname.includes("/home");
+
+      if (isSupplement) {
+        return {
+          type: "supplement",
+          isAttempt: false,
+          isLanding: false,
+          isFeedback: false,
+          isSupplement: true,
+          isOther: false,
+          pathname
+        };
+      }
+
+      // Check if lecture video or reading item is currently on screen
+      if (typeof document !== "undefined" && document.querySelector('video, .rc-VideoPlayer, div[data-testid="video-player"], .rc-ReadingItem, div[data-testid="reading-content"]')) {
+        return {
+          type: "supplement",
+          isAttempt: false,
+          isLanding: false,
+          isFeedback: false,
+          isSupplement: true,
+          isOther: false,
+          pathname
+        };
+      }
+
+      // 3. Active Assignment Attempt routes
+      // Confirmed active attempt requires explicit attempt route structure
+      const isExplicitAttempt =
+        pathname.endsWith("/attempt") ||
+        pathname.includes("/attempt/") ||
+        (pathname.includes("/assignment-submission/") && pathname.includes("/attempt")) ||
+        (pathname.includes("/exam/") && pathname.includes("/attempt")) ||
+        (pathname.includes("/quiz/") && pathname.includes("/attempt")) ||
+        (pathname.includes("/assignment/") && pathname.includes("/attempt"));
+
+      if (isExplicitAttempt) {
+        return {
+          type: "active-attempt",
+          isAttempt: true,
+          isLanding: false,
+          isFeedback: false,
+          isSupplement: false,
+          isOther: false,
+          pathname
+        };
+      }
+
+      // 4. Assignment Landing Page
+      // Has "Start assignment" button OR overview landing URL structure without /attempt
+      const hasStartBtn = typeof findAssignmentStartButton === "function" && Boolean(findAssignmentStartButton());
+      const isLandingUrl =
+        (pathname.includes("/exam/") ||
+         pathname.includes("/quiz/") ||
+         pathname.includes("/assignment/") ||
+         pathname.includes("/assignment-submission/")) &&
+        !pathname.includes("/attempt");
+
+      if (hasStartBtn || isLandingUrl) {
+        return {
+          type: "landing",
+          isAttempt: false,
+          isLanding: true,
+          isFeedback: false,
+          isSupplement: false,
+          isOther: false,
+          pathname
+        };
+      }
+
+      return {
+        type: "other",
+        isAttempt: false,
+        isLanding: false,
+        isFeedback: false,
+        isSupplement: false,
+        isOther: true,
+        pathname
+      };
+    }
+
+    /**
      * Confirmed exact Coursera selector verified directly in Coursera DevTools:
      */
     const EXACT_START_SPAN_SELECTOR = '#main-container > div.css-1bu5epf > div > div > div > div > article > div.css-i78ge5 > div.css-1y89sx6 > div.css-1ieirtn > button.cds-116.cds-button-disableElevation.cds-button-primary.css-g3vqgc > span';
@@ -3604,88 +3993,9 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
      * Determines if current Coursera page is an active or upcoming assessment.
      */
     function isEligibleAssignmentPage() {
-      const pathname = (window.location.pathname || "").toLowerCase();
-      console.log(`[Coursera Extension] isEligibleAssignmentPage() evaluation for path: "${pathname}"`);
-
-      // Exclude non-assignment views immediately
-      if (
-        pathname.includes("/lecture/") ||
-        pathname.includes("/reading/") ||
-        pathname.includes("/supplement/") ||
-        pathname.includes("/discussions/") ||
-        pathname.includes("/coach/") ||
-        pathname.includes("/ungradedwidget/") ||
-        pathname.includes("/home")
-      ) {
-        console.log(`[Coursera Extension] Path "${pathname}" is explicitly a non-assignment route.`);
-        return false;
-      }
-
-      // Check if lecture video or reading item is currently on screen
-      if (document.querySelector('video, .rc-VideoPlayer, div[data-testid="video-player"], .rc-ReadingItem, div[data-testid="reading-content"]')) {
-        console.log("[Coursera Extension] Video player or reading content element is active on screen.");
-        return false;
-      }
-
-      // 1. Direct check: Start Assignment button present on page (Screenshot 1)
-      if (findAssignmentStartButton()) {
-        console.log("[Coursera Extension] Eligibility confirmed: Verified Start Assignment button found in DOM.");
-        return true;
-      }
-
-      // 2. Questions already active in DOM
-      if (hasLoadedAssignmentQuestions()) {
-        console.log("[Coursera Extension] Eligibility confirmed: Assessment question elements found in DOM.");
-        return true;
-      }
-
-      // 3. Check Coursera item header pill or type title
-      const pillSelectors = [
-        '[data-testid="item-type-pill"]',
-        '.rc-ItemContentHeader',
-        '[class*="ItemContentHeader" i]',
-        '[data-testid="item-header-title"]',
-        'h1[class*="ItemHeader" i]',
-        '.item-type-pill',
-        'div[class*="itemHeader" i]',
-        'div[class*="itemType" i]'
-      ];
-      for (const sel of pillSelectors) {
-        const el = document.querySelector(sel);
-        if (el && isElementVisible(el)) {
-          const txt = (el.innerText || el.textContent || "").toLowerCase();
-          if (/\b(graded assignment|practical assignment|practice assignment|peer-graded assignment|programming assignment|assignment|graded quiz|practice quiz|quiz|exam|assessment)\b/i.test(txt)) {
-            console.log(`[Coursera Extension] Eligibility confirmed: Header pill matches "${txt}".`);
-            return true;
-          }
-        }
-      }
-
-      // 4. Check visible headings and labels for assignment indicators
-      const pageHeadings = Array.from(document.querySelectorAll('h1, h2, h3, [role="heading"], div[class*="title" i], p, span'));
-      for (const h of pageHeadings) {
-        if (!isElementVisible(h)) continue;
-        const txt = (h.innerText || h.textContent || "").trim();
-        if (/\b(graded assignment|practical assignment|practice assignment|peer-graded assignment|programming assignment|graded quiz|practice quiz)\b/i.test(txt)) {
-          console.log(`[Coursera Extension] Eligibility confirmed: Page heading matches "${txt}".`);
-          return true;
-        }
-      }
-
-      // 5. URL pathname structure check
-      if (
-        pathname.includes("/exam/") ||
-        pathname.includes("/quiz/") ||
-        pathname.includes("/assignment-submission/") ||
-        pathname.includes("/assignment/") ||
-        pathname.endsWith("/attempt")
-      ) {
-        console.log(`[Coursera Extension] Eligibility confirmed: Path structure indicates assessment "${pathname}".`);
-        return true;
-      }
-
-      console.log(`[Coursera Extension] Page not recognized as an eligible assessment page: "${pathname}".`);
-      return false;
+      const route = classifyCourseraRoute();
+      console.log(`[Route] Page classified: ${route.type} ("${route.pathname}")`);
+      return route.isAttempt || route.isLanding;
     }
 
     /**
@@ -3987,11 +4297,12 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
      * Determines whether assignment questions have loaded in the DOM.
      */
     function hasLoadedAssignmentQuestions() {
+      const route = typeof classifyCourseraRoute === "function" ? classifyCourseraRoute() : { isAttempt: true, isFeedback: false, isSupplement: false, isOther: false };
+      if (route.isFeedback || route.isSupplement || route.isOther) {
+        return false;
+      }
       const qEls = findVisibleQuestionElements();
-      if (qEls && qEls.length > 0) return true;
-
-      const inputCount = document.querySelectorAll('input[type="radio"], input[type="checkbox"]').length;
-      return inputCount > 0;
+      return Boolean(qEls && qEls.length > 0);
     }
 
     /**
@@ -4197,37 +4508,44 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
 
       removeAutoSolveDock();
 
-      if (!isEligibleAssignmentPage()) {
+      const route = classifyCourseraRoute();
+      console.log(`[Route] Page classified: ${route.type} ("${route.pathname}")`);
+
+      if (!route.isAttempt && !route.isLanding) {
+        console.log(`[Workflow] Solver not triggered: inactive attempt (${route.type})`);
         return;
       }
 
       const currentPath = window.location.pathname;
-      const currentHref = window.location.href;
-      const isAttemptRoute = currentPath.endsWith("/attempt") ||
-        currentPath.includes("/assignment-submission/") ||
-        currentPath.includes("/attempt/") ||
-        (currentHref.includes("/attempt") && !currentHref.includes("/review/"));
-
-      console.log("[Coursera Extension] Assignment page detected:", currentPath, "isAttemptRoute:", isAttemptRoute);
-
       const attemptKey = getAssignmentAttemptKey();
 
-      // 1. If on an attempt route: enforce 5-second stabilization delay + stability check before extraction
-      if (isAttemptRoute) {
+      // 1. If on an active attempt route: enforce 5-second stabilization delay + stability check before extraction
+      if (route.isAttempt) {
         if (autoSolvedAttemptKeys.has(attemptKey)) {
           return;
         }
 
         isAttemptStabilizing = true;
-        console.log("[Assignment Workflow] Detected /attempt route. Waiting 5s stabilization delay...");
+        console.log("[Assignment Workflow] Detected active attempt route. Waiting 5s stabilization delay...");
 
         try {
           // 5-second initial stabilization period
           await sleep(5000);
 
+          // Verify page is STILL an active attempt after delay
+          const postDelayRoute = classifyCourseraRoute();
+          if (!postDelayRoute.isAttempt) {
+            console.log(`[Assignment Workflow] Route changed away from attempt after delay (${postDelayRoute.type}). Aborting.`);
+            return;
+          }
+
           // Wait until question DOM is available (up to 15s)
           console.log("[Assignment Workflow] Waiting for question DOM to become available...");
-          await waitForAssignmentQuestionsToLoad(15000);
+          const questionsLoaded = await waitForAssignmentQuestionsToLoad(15000);
+          if (!questionsLoaded) {
+            console.warn("[Assignment Workflow] Questions not loaded within timeout.");
+            return;
+          }
 
           // Check that question text and answer options have finished rendering and are stable
           console.log("[Assignment Workflow] Verifying question content stability...");
@@ -4243,124 +4561,113 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         return;
       }
 
-      // 2. If questions are already active and loaded in DOM (e.g. on /quiz/ or /exam/ page without /attempt in path)
-      if (hasLoadedAssignmentQuestions()) {
-        await waitForQuestionsContentStable(4000);
-        await triggerAutoSolveIfEligible();
-        return;
-      }
+      // 2. If on an assignment landing/overview page with a Start button
+      if (route.isLanding) {
+        console.log("[Coursera Extension] Assignment landing page detected. Checking for Start Assignment button...");
+        const startBtn = findAssignmentStartButton();
+        if (startBtn) {
+          console.log("[Coursera Extension] Start button detected in DOM. Current path:", currentPath);
+          if (launchedAssignmentPaths.has(currentPath)) {
+            console.log(`[Coursera Extension] Path "${currentPath}" already recorded in launchedAssignmentPaths. Waiting for attempt navigation.`);
+            return;
+          }
 
-      // 3. If on an assignment landing/overview page with a Start button
-      console.log("[Coursera Extension] Step 3: Checking for Start Assignment button...");
-      const startBtn = findAssignmentStartButton();
-      if (startBtn) {
-        console.log("[Coursera Extension] Start button detected in DOM. Current path:", currentPath);
-        if (launchedAssignmentPaths.has(currentPath)) {
-          console.log(`[Coursera Extension] Path "${currentPath}" already recorded in launchedAssignmentPaths. Waiting for attempt navigation.`);
-          return;
-        }
+          // Before clicking, verify:
+          // - Button exists
+          // - Button is visible
+          // - Button is enabled
+          // - Button text is "Start assignment"
+          const exists = Boolean(startBtn && startBtn.isConnected);
+          const visible = isElementVisible(startBtn);
+          const enabled = !startBtn.disabled && startBtn.getAttribute("aria-disabled") !== "true" && !startBtn.classList?.contains("disabled");
+          const rawText = (startBtn.innerText || startBtn.textContent || "").trim();
+          const isStartText = /start\s+assignment/i.test(rawText);
 
-        // Before clicking, verify:
-        // - Button exists
-        // - Button is visible
-        // - Button is enabled
-        // - Button text is "Start assignment"
-        const exists = Boolean(startBtn && startBtn.isConnected);
-        const visible = isElementVisible(startBtn);
-        const enabled = !startBtn.disabled && startBtn.getAttribute("aria-disabled") !== "true" && !startBtn.classList?.contains("disabled");
-        const rawText = (startBtn.innerText || startBtn.textContent || "").trim();
-        const isStartText = /start\s+assignment/i.test(rawText);
+          console.log(`[Coursera Extension] Pre-click verification: exists=${exists}, visible=${visible}, enabled=${enabled}, text="${rawText}", isStartText=${isStartText}`);
 
-        console.log(`[Coursera Extension] Pre-click verification: exists=${exists}, visible=${visible}, enabled=${enabled}, text="${rawText}", isStartText=${isStartText}`);
+          if (!exists || !visible || !enabled || !isStartText) {
+            console.warn("[Coursera Extension] Button failed pre-click verification criteria. Aborting click.", {
+              exists,
+              visible,
+              enabled,
+              rawText,
+              isStartText
+            });
+            return;
+          }
 
-        if (!exists || !visible || !enabled || !isStartText) {
-          console.warn("[Coursera Extension] Button failed pre-click verification criteria. Aborting click.", {
-            exists,
-            visible,
-            enabled,
-            rawText,
-            isStartText
-          });
-          return;
-        }
+          isLaunchingAssignment = true;
+          launchedAssignmentPaths.add(currentPath);
 
-        isLaunchingAssignment = true;
-        launchedAssignmentPaths.add(currentPath);
-
-        try {
-          console.log(`[Coursera Extension] Executing click on Start Assignment button ("${rawText}")...`);
-
-          startBtn.focus();
-          startBtn.scrollIntoView({ behavior: "smooth", block: "center" });
-          await sleep(250);
-
-          // Native click + synthetic MouseEvents
-          startBtn.click();
           try {
-            startBtn.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
-            startBtn.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
-            startBtn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
-          } catch (_) {}
+            console.log(`[Coursera Extension] Executing click on Start Assignment button ("${rawText}")...`);
 
-          console.log("[Coursera Extension] Start Assignment click executed. Handling pre-quiz dialogs & awaiting navigation...");
-          await sleep(600);
+            startBtn.focus();
+            startBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+            await sleep(250);
 
-          // Handle any pre-quiz modal confirmation dialog ("Continue" / "Start Attempt")
-          await handlePreQuizModals();
+            // Native click + synthetic MouseEvents
+            startBtn.click();
+            try {
+              startBtn.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+              startBtn.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+              startBtn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+            } catch (_) {}
 
-          // Wait for page to navigate or initialize
-          const navStartTime = Date.now();
-          let navigated = false;
-          while (Date.now() - navStartTime < 8000) {
-            await sleep(400);
+            console.log("[Coursera Extension] Start Assignment click executed. Handling pre-quiz dialogs & awaiting navigation...");
+            await sleep(600);
+
+            // Handle any pre-quiz modal confirmation dialog ("Continue" / "Start Attempt")
             await handlePreQuizModals();
-            const currHref = window.location.href;
-            const currPath = window.location.pathname;
-            if (
-              currHref.includes("/attempt") ||
-              currPath.endsWith("/attempt") ||
-              currPath.includes("/assignment-submission/") ||
-              hasLoadedAssignmentQuestions()
-            ) {
-              navigated = true;
-              console.log(`[Coursera Extension] Navigation to attempt route confirmed: "${currHref}"`);
-              break;
+
+            // Wait for page to navigate to attempt route (up to 8s)
+            const navStartTime = Date.now();
+            let navigated = false;
+            while (Date.now() - navStartTime < 8000) {
+              await sleep(400);
+              await handlePreQuizModals();
+              const currRoute = classifyCourseraRoute();
+              if (currRoute.isAttempt) {
+                navigated = true;
+                console.log(`[Coursera Extension] Navigation to attempt route confirmed: "${window.location.href}"`);
+                break;
+              }
             }
-          }
 
-          if (!navigated) {
-            console.warn("[Coursera Extension] Navigation to attempt not detected within 8s. Releasing launchedAssignmentPaths.");
+            if (!navigated) {
+              console.warn("[Coursera Extension] Navigation to attempt not detected within 8s. Releasing launchedAssignmentPaths.");
+              launchedAssignmentPaths.delete(currentPath);
+            }
+
+            // Wait 5 seconds initialization delay after navigation/attempt detection
+            console.log("[Coursera Extension] Waiting 5 seconds initialization delay after navigation/attempt detection...");
+            await sleep(5000);
+
+            // Wait for question DOM readiness (up to 15s)
+            console.log("[Coursera Extension] Waiting for assignment questions to render...");
+            const questionsLoaded = await waitForAssignmentQuestionsToLoad(15000);
+            console.log(`[Coursera Extension] Questions loaded: ${questionsLoaded}`);
+
+            if (questionsLoaded) {
+              console.log("[Coursera Extension] Verifying question content stability...");
+              await waitForQuestionsContentStable(10000);
+            }
+
+            // Release launch lock prior to auto-solve evaluation
+            isLaunchingAssignment = false;
+
+            if (questionsLoaded) {
+              console.log("[Coursera Extension] Triggering AI solver exactly once for attempt...");
+              await triggerAutoSolveIfEligible();
+            }
+          } catch (err) {
+            console.error("[Coursera Extension] Error during Start Assignment workflow:", err);
             launchedAssignmentPaths.delete(currentPath);
+          } finally {
+            isLaunchingAssignment = false;
           }
-
-          // Wait 5 seconds initialization delay after navigation/attempt detection
-          console.log("[Coursera Extension] Waiting 5 seconds initialization delay after navigation/attempt detection...");
-          await sleep(5000);
-
-          // Wait for question DOM readiness (up to 15s)
-          console.log("[Coursera Extension] Waiting for assignment questions to render...");
-          const questionsLoaded = await waitForAssignmentQuestionsToLoad(15000);
-          console.log(`[Coursera Extension] Questions loaded: ${questionsLoaded}`);
-
-          if (questionsLoaded) {
-            console.log("[Coursera Extension] Verifying question content stability...");
-            await waitForQuestionsContentStable(10000);
-          }
-
-          // Release launch lock prior to auto-solve evaluation
-          isLaunchingAssignment = false;
-
-          if (questionsLoaded) {
-            console.log("[Coursera Extension] Triggering AI solver exactly once for attempt...");
-            await triggerAutoSolveIfEligible();
-          }
-        } catch (err) {
-          console.error("[Coursera Extension] Error during Start Assignment workflow:", err);
-          launchedAssignmentPaths.delete(currentPath);
-        } finally {
-          isLaunchingAssignment = false;
+          return;
         }
-        return;
       }
     }
 
@@ -4389,6 +4696,27 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
      */
     async function solveQuiz() {
       if (isSolvingQuiz) return;
+
+      const route = typeof classifyCourseraRoute === "function" ? classifyCourseraRoute() : { isAttempt: true, isFeedback: false, isSupplement: false, isOther: false, pathname: window.location.pathname };
+      console.log(`[Route] Page classified: ${route.type} ("${route.pathname}")`);
+
+      if (route.isFeedback || route.isSupplement || route.isOther) {
+        console.warn(`[Workflow] Solver not triggered: inactive attempt (${route.type}) on path "${route.pathname}"`);
+        if (typeof showToast === "function") {
+          showToast(`Quiz solver is only available on active assignment attempts (current page: ${route.type}).`, "warning");
+        }
+        return;
+      }
+
+      if (route.isLanding) {
+        const startBtn = findAssignmentStartButton();
+        if (startBtn) {
+          console.log("[AI Solver] Start Assignment button present on landing page. Triggering assignment launch...");
+          await checkAndHandleAssignmentLaunch();
+          return;
+        }
+      }
+
       isSolvingQuiz = true;
 
       const triggerBtn = document.getElementById("coursera-auto-solve-trigger");
@@ -4458,7 +4786,8 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
             return;
           }
 
-          const noQMsg = "No assignment questions found on this page.";
+          const noQMsg = "No valid assignment questions found on this page.";
+          console.log(`[Workflow] Stopped: ${noQMsg}`);
           updateDockStatus(noQMsg, "error");
           notifyQuizProgress("error", { message: noQMsg });
           return;
@@ -5247,8 +5576,18 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         }
 
         if (answer) {
+          const visibleOptions = findQuestionOptionInputs(questionEl);
+          const textInput = questionEl.querySelector('textarea, input[type="text"]');
+
+          // If question is not a text question and has 0 options in DOM, skip choice marking
+          if (answer.type !== "text" && visibleOptions.length === 0 && !textInput) {
+            console.warn(`[Mapping] Skipped: Question #${index + 1} has 0 valid options in DOM.`);
+            continue;
+          }
+
           const { markedCount } = await applyQuestionAnswers(questionEl, answer);
           totalMarkedCount += markedCount;
+          console.log(`[Mapping] Matched ${markedCount}/${visibleOptions.length || 1} options for question #${index + 1}`);
 
           if (typeof onProgress === "function") {
             onProgress(index + 1, questionElements.length, { questionNum: index + 1, markedCount });
@@ -5259,9 +5598,10 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       }
 
       if (totalMarkedCount > 0) {
+        console.log(`[Mapping] Successfully mapped total ${totalMarkedCount} option(s) in DOM.`);
         showToast(`Selected ${totalMarkedCount} option${totalMarkedCount === 1 ? '' : 's'}.`, "success");
       } else {
-        console.warn("[Coursera Assistant] Warning: 0 options could be marked in the DOM.");
+        console.warn("[Mapping] Warning: 0 options could be marked in the DOM.");
         showToast("Answers generated, but no matching options could be selected in the page.", "warning");
       }
 
