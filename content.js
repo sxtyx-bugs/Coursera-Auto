@@ -2698,7 +2698,12 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           "own work",
           "attestation",
           "honor pledge",
-          "academic dishonesty"
+          "academic dishonesty",
+          "understand and agree",
+          "confirm this work is your own",
+          "submitting work created with ai",
+          "coursera honor code policy",
+          "select the checkbox in order to submit"
         ];
 
         if (integrityPhrases.some(phrase => text.includes(phrase))) {
@@ -3450,13 +3455,27 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         '[class*="ItemContentHeader" i]',
         '[data-testid="item-header-title"]',
         'h1[class*="ItemHeader" i]',
-        '.item-type-pill'
+        '.item-type-pill',
+        'div[class*="itemHeader" i]',
+        'div[class*="itemType" i]'
       ];
       for (const sel of pillSelectors) {
         const el = document.querySelector(sel);
         if (el && isElementVisible(el)) {
           const txt = (el.innerText || el.textContent || "").toLowerCase();
           if (/\b(graded assignment|practical assignment|practice assignment|peer-graded assignment|programming assignment|assignment|graded quiz|practice quiz|quiz|exam|assessment)\b/i.test(txt)) {
+            return true;
+          }
+        }
+      }
+
+      // Check visible headings and labels for assignment indicators (Screenshot 1)
+      const pageHeadings = Array.from(document.querySelectorAll('h1, h2, h3, [role="heading"], div[class*="title" i], p, span'));
+      for (const h of pageHeadings) {
+        if (!isElementVisible(h)) continue;
+        const txt = (h.innerText || h.textContent || "").trim();
+        if (/\b(graded assignment|practical assignment|practice assignment|peer-graded assignment|programming assignment|graded quiz|practice quiz)\b/i.test(txt)) {
+          if (findAssignmentStartButton() || hasLoadedAssignmentQuestions()) {
             return true;
           }
         }
@@ -3487,7 +3506,8 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     }
 
     /**
-     * Finds the Start / Resume Assignment button on an assignment landing or overview page.
+     * Finds the Start / Resume Assignment button on an assignment landing page (Screenshot 1).
+     * Uses accessible names and DOM semantics; never confuses with "Help me practice" or unrelated buttons.
      */
     function findAssignmentStartButton() {
       const startButtonSelectors = [
@@ -3502,7 +3522,8 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         'a[data-testid*="start" i]',
         'a[data-testid*="resume" i]',
         'a[href$="/attempt"]',
-        'button.cds-button'
+        'button.cds-button',
+        'a.cds-button'
       ];
 
       for (const sel of startButtonSelectors) {
@@ -3510,12 +3531,22 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           const elements = Array.from(document.querySelectorAll(sel));
           for (const el of elements) {
             if (!isElementVisible(el)) continue;
-            const text = (el.innerText || el.textContent || "").trim();
+            // Exclude buttons inside modal dialogs
+            if (el.closest('div[role="dialog"], div.rc-Modal, div.cds-dialog, div[class*="modal" i]')) continue;
+
+            const text = (el.innerText || el.textContent || el.getAttribute("aria-label") || "").trim().toLowerCase();
+            const dataTestId = (el.getAttribute("data-testid") || "").toLowerCase();
+            const href = (el.getAttribute("href") || "").toLowerCase();
+
+            // Strict safety: Never match "Help me practice"
+            if (text.includes("help me practice")) continue;
+
             if (
               /^(start\s+assignment|start\s+quiz|start\s+attempt|start|resume\s+assignment|resume\s+quiz|resume\s+attempt|resume|take\s+quiz|begin\s+assignment|begin\s+quiz)$/i.test(text) ||
-              el.getAttribute("data-testid") === "start-assignment-button" ||
-              el.getAttribute("data-testid") === "resume-assignment-button" ||
-              el.getAttribute("href")?.endsWith("/attempt")
+              dataTestId === "start-assignment-button" ||
+              dataTestId === "resume-assignment-button" ||
+              dataTestId === "start-quiz-button" ||
+              href.endsWith("/attempt")
             ) {
               return el;
             }
@@ -3523,11 +3554,15 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
         } catch (_) {}
       }
 
-      // Broad search by visible button text
-      const allButtons = Array.from(document.querySelectorAll("button, a.cds-button"));
+      // Broad search by visible button text & accessible name
+      const allButtons = Array.from(document.querySelectorAll("button, a.cds-button, [role='button']"));
       for (const btn of allButtons) {
         if (!isElementVisible(btn)) continue;
-        const text = (btn.innerText || btn.textContent || "").trim();
+        if (btn.closest('div[role="dialog"], div.rc-Modal, div.cds-dialog, div[class*="modal" i]')) continue;
+
+        const text = (btn.innerText || btn.textContent || btn.getAttribute("aria-label") || "").trim().toLowerCase();
+        if (text.includes("help me practice")) continue;
+
         if (/^(start\s+assignment|start\s+quiz|start\s+attempt|start|resume\s+assignment|resume\s+quiz|resume\s+attempt|resume|take\s+quiz|begin\s+assignment|begin\s+quiz)$/i.test(text)) {
           return btn;
         }
@@ -3536,7 +3571,111 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
     }
 
     /**
-     * Finds the final submission button on an active assessment page.
+     * Finds the Honor Code container section in the assignment DOM (Screenshot 2).
+     */
+    function findHonorCodeSection() {
+      const honorSelectors = [
+        '.rc-HonorCode',
+        '[data-testid*="honor" i]',
+        '[data-testid*="integrity" i]',
+        '[data-testid*="attestation" i]',
+        '[class*="HonorCode" i]',
+        '[class*="AcademicIntegrity" i]'
+      ];
+      for (const sel of honorSelectors) {
+        const el = document.querySelector(sel);
+        if (el && isElementVisible(el)) return el;
+      }
+
+      // Semantic search by Honor Code heading / text
+      const headings = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, [role="heading"], div, legend, p'));
+      for (const h of headings) {
+        if (!isElementVisible(h)) continue;
+        const txt = (h.innerText || h.textContent || "").trim();
+        if (/^(coursera\s+)?honor\s+code$/i.test(txt) || /^by\s+clicking\s+submit,\s+you\s+confirm/i.test(txt)) {
+          const container = h.closest('fieldset, form, div[class*="section" i], div[class*="card" i]') || h.parentElement?.parentElement || h.parentElement;
+          if (container) return container;
+        }
+      }
+
+      // Locate by integrity declaration checkbox parent
+      const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+      for (const cb of checkboxes) {
+        if (isAcademicIntegrityDeclaration(cb)) {
+          return cb.closest('fieldset, form, div[class*="section" i], div[class*="card" i]') || cb.parentElement?.parentElement || cb.parentElement;
+        }
+      }
+
+      return null;
+    }
+
+    /**
+     * Finds the Honor Code pledge checkbox within or near the Honor Code section (Screenshot 2).
+     */
+    function findHonorCodeCheckbox(honorSection = null) {
+      const root = honorSection || document;
+      const checkboxes = Array.from(root.querySelectorAll('input[type="checkbox"], [role="checkbox"]'));
+      for (const cb of checkboxes) {
+        if (isAcademicIntegrityDeclaration(cb)) {
+          return cb;
+        }
+      }
+      return null;
+    }
+
+    /**
+     * Accurately determines if the Honor Code pledge checkbox is checked.
+     */
+    function isHonorCodeCheckboxChecked(cb) {
+      if (!cb) return false;
+      return Boolean(cb.checked || cb.getAttribute("aria-checked") === "true");
+    }
+
+    /**
+     * Determines whether a native Coursera Submit button is currently enabled.
+     */
+    function isSubmitButtonEnabled(submitBtn) {
+      if (!submitBtn) return false;
+      const isDisabledAttr = submitBtn.disabled || submitBtn.getAttribute("aria-disabled") === "true";
+      const hasDisabledClass = submitBtn.classList?.contains("disabled") ||
+                               submitBtn.classList?.contains("cds-button--disabled") ||
+                               submitBtn.getAttribute("disabled") !== null;
+      return !isDisabledAttr && !hasDisabledClass;
+    }
+
+    /**
+     * Detects Coursera's native "Ready to submit?" confirmation modal dialog (Screenshot 3).
+     * Distinguishes it from in-page buttons and ensures the modal is never interfered with.
+     */
+    function findReadyToSubmitModal() {
+      const modalCandidates = Array.from(document.querySelectorAll(
+        'div[role="dialog"], div.rc-Modal, div.cds-dialog, div[class*="modal" i], div[class*="Dialog" i]'
+      ));
+      for (const dialog of modalCandidates) {
+        if (!isElementVisible(dialog)) continue;
+        const txt = (dialog.innerText || dialog.textContent || "");
+        if (/ready\s+to\s+submit\??/i.test(txt)) {
+          const submitBtn = Array.from(dialog.querySelectorAll("button, a.cds-button")).find(b => {
+            const bText = (b.innerText || b.textContent || "").trim();
+            return /^submit$/i.test(bText) || b.getAttribute("data-testid")?.includes("submit");
+          });
+          const cancelBtn = Array.from(dialog.querySelectorAll("button, a.cds-button")).find(b => {
+            const bText = (b.innerText || b.textContent || "").trim();
+            return /^cancel$/i.test(bText) || b.getAttribute("data-testid")?.includes("cancel");
+          });
+          return {
+            dialog,
+            submitButton: submitBtn || null,
+            cancelButton: cancelBtn || null,
+            isSubmitEnabled: submitBtn ? isSubmitButtonEnabled(submitBtn) : false
+          };
+        }
+      }
+      return null;
+    }
+
+    /**
+     * Finds the final submission button on an active assessment page (outside any modal dialog).
      */
     function findSubmitButton() {
       const submitSelectors = [
@@ -3547,8 +3686,10 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       ];
 
       for (const sel of submitSelectors) {
-        const btn = document.querySelector(sel);
-        if (btn && isElementVisible(btn)) {
+        const elements = Array.from(document.querySelectorAll(sel));
+        for (const btn of elements) {
+          if (!isElementVisible(btn)) continue;
+          if (btn.closest('div[role="dialog"], div.rc-Modal, div.cds-dialog, div[class*="modal" i]')) continue;
           return btn;
         }
       }
@@ -3556,6 +3697,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       const allButtons = Array.from(document.querySelectorAll("button, a.cds-button"));
       for (const btn of allButtons) {
         if (!isElementVisible(btn)) continue;
+        if (btn.closest('div[role="dialog"], div.rc-Modal, div.cds-dialog, div[class*="modal" i]')) continue;
         const text = (btn.innerText || btn.textContent || "").trim();
         if (/^(submit|submit\s+quiz|submit\s+assignment|submit\s+exam)$/i.test(text)) {
           return btn;
@@ -3682,6 +3824,21 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
       if (!autoQuizEnabled) {
         console.log("[Assignment Workflow] Auto-quiz is toggled off in settings.");
         return;
+      }
+
+      // If configuration not yet populated into aiSolverInstance, refresh from storage
+      if (!aiSolverInstance.hasConfiguredProvider()) {
+        try {
+          const stored = await new Promise(resolve => {
+            chrome.storage.local.get(
+              ["providersConfig", "key", "groqApiKey", "cerebrasApiKey", "openrouterApiKey"],
+              resolve
+            );
+          });
+          if (stored) {
+            aiSolverInstance.updateConfig(stored);
+          }
+        } catch (_) {}
       }
 
       if (!aiSolverInstance.hasConfiguredProvider()) {
@@ -3814,6 +3971,9 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           // Wait for actual assignment questions to render in DOM
           const questionsLoaded = await waitForAssignmentQuestionsToLoad(15000);
           console.log(`[Assignment Workflow] Questions loaded after launch: ${questionsLoaded}`);
+
+          // Release launch lock prior to auto-solve evaluation
+          isLaunchingAssignment = false;
 
           if (questionsLoaded) {
             await triggerAutoSolveIfEligible();
@@ -3990,7 +4150,7 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
 
         // 4. Safe final review navigation: smoothly scroll to the submission / honor code section
         updateDockStatus("Navigating to final submission review...", "info");
-        const honorSection = document.querySelector('.rc-HonorCode, [data-testid*="honor" i], [data-testid*="integrity" i], [class*="HonorCode" i]');
+        const honorSection = findHonorCodeSection();
         const submitBtn = findSubmitButton();
         if (honorSection) {
           try {
@@ -4004,6 +4164,12 @@ Respond ONLY with valid JSON matching { "results": [ ... ] }. Do not include tex
           window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
         }
         await sleep(400);
+
+        // Detect Honor Code checkbox & native Submit button states (Screenshot 2)
+        const honorCheckbox = findHonorCodeCheckbox(honorSection);
+        const isHonorChecked = isHonorCodeCheckboxChecked(honorCheckbox);
+        const isSubmitEnabled = isSubmitButtonEnabled(submitBtn);
+        console.log(`[Assignment Workflow] Review section reached. Honor Code checked=${isHonorChecked}, Submit enabled=${isSubmitEnabled}`);
 
         // 5. Final review audit: separate required questions from academic integrity declaration
         const questionElements = findVisibleQuestionElements();
